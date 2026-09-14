@@ -31,6 +31,7 @@ import TitleTabs from './TitleTabs';
 import VoiceStudioMark from './brand/VoiceStudioMark';
 import { useAppStore } from '../store';
 import { useSysinfo, useEngines } from '../api/hooks';
+import { useEngineDefaultLanguages } from '../hooks/useEngineDefaultLanguages';
 import { reloadAfterApplicationPersistence } from '../utils/persistenceLifecycle';
 
 const VIEW_META = {
@@ -173,6 +174,7 @@ export default function Header({
   const [flushOpen, setFlushOpen] = useState(false);
   const [engineFamily, setEngineFamily] = useState('tts');
   const { data: engines } = useEngines();
+  useEngineDefaultLanguages(engines);
   const [engineLabelIndex, setEngineLabelIndex] = useState(0);
   const [engineLabelPaused, setEngineLabelPaused] = useState(false);
   const activeEngines = ['tts', 'asr', 'llm'].flatMap((family) => {

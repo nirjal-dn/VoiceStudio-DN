@@ -874,6 +874,7 @@
     "save": "Spara",
     "reset_default": "Återställ till standard",
     "listening_label": "Lyssnar...",
+    "no_input": "Inget ljud upptäckt – kontrollera mikrofonen",
     "transcribing_label": "Transkriberar...",
     "a11y_setup": "Tillåt Hjälpmedel så att diktering kan skriva åt dig",
     "pasted": "Klistras in",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transkriptioner",
+    "live_title": "Direkttranskribering",
     "entries": "{{count}} poster",
     "search_placeholder": "Sök efter transkriptioner...",
     "export": "Exportera",

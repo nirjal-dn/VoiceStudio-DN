@@ -9,7 +9,17 @@
  */
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Mic, Copy, Trash2, Search, Clock, Languages, FileText, Download } from 'lucide-react';
+import {
+  Mic,
+  Copy,
+  Trash2,
+  Search,
+  Clock,
+  Languages,
+  FileText,
+  Download,
+  Square,
+} from 'lucide-react';
 import { Button } from '../ui';
 import { detectPlatform } from '../utils/micError';
 import { useDictationReadiness } from '../hooks/useDictationReadiness';
@@ -19,6 +29,7 @@ import { copyText as copyToClipboard } from '../utils/copyText';
 import { toMillis } from '../utils/relativeTime';
 import { useEffectiveDictationShortcut } from '../hooks/useEffectiveDictationShortcut';
 import { requestDictationCapture } from '../utils/dictationCapture';
+import { useDictationLive } from '../hooks/useDictationLive';
 import {
   loadTranscriptions,
   TRANSCRIPTIONS_KEY,
@@ -64,6 +75,11 @@ export function addTranscription(entry) {
   window.dispatchEvent(new CustomEvent(TRANSCRIPTION_EVENT, { detail: newEntry }));
 }
 
+function formatLiveClock(seconds = 0) {
+  const total = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 export default function TranscriptionsPage() {
   const { t } = useTranslation();
   const [transcriptions, setTranscriptions] = useState(loadTranscriptions);
@@ -78,6 +94,14 @@ export default function TranscriptionsPage() {
   const captureDisabled = readiness.phase !== 'ready' || starting;
   const emptyDescription = t('transcriptions.empty_desc', { shortcut: shortcut.display });
   const normalizedSearch = search.trim();
+  // Live transcript of the dictation in progress, streamed from the capture pill.
+  const live = useDictationLive();
+  const liveActive = live?.state === 'recording' || live?.state === 'transcribing';
+  const stopCapture = useCallback(() => {
+    requestDictationCapture('stop').catch((error) =>
+      console.warn('Could not stop dictation:', error),
+    );
+  }, []);
 
   const startCapture = useCallback(async () => {
     if (captureDisabled) return;
@@ -283,6 +307,53 @@ export default function TranscriptionsPage() {
             )
           )}
         </div>
+      )}
+
+      {liveActive && (
+        <section
+          className="flex flex-col gap-2 rounded-lg border border-border bg-bg-elev-1 p-4"
+          aria-label={t('transcriptions.live_title')}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 text-sm font-semibold text-fg">
+              <span
+                aria-hidden="true"
+                className={`h-2 w-2 rounded-full bg-brand ${
+                  live.state === 'recording' && !live.paused
+                    ? 'motion-safe:animate-pulse'
+                    : 'opacity-40'
+                }`}
+              />
+              {t('transcriptions.live_title')}
+            </span>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-xs text-fg-muted">
+                {formatLiveClock(live.seconds)}
+              </span>
+              {live.state === 'recording' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  leading={<Square size={12} />}
+                  onClick={stopCapture}
+                >
+                  {t('common.stop')}
+                </Button>
+              )}
+            </div>
+          </div>
+          <p
+            className="m-0 whitespace-pre-wrap text-sm leading-[1.7] text-fg [word-break:break-word]"
+            aria-live="polite"
+          >
+            {live.text ||
+              (live.state === 'transcribing'
+                ? t('capture.transcribing_label')
+                : live.noInput
+                  ? t('capture.no_input')
+                  : t('capture.listening_label'))}
+          </p>
+        </section>
       )}
 
       <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">

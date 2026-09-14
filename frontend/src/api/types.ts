@@ -71,6 +71,8 @@ export interface EngineBackend {
   curated_models?: CuratedModel[];
   active_model_id?: string;
   disk_usage?: EngineDiskUsage;
+  // ISO code the UI selects instead of "Auto" while this engine is active.
+  default_language?: string | null;
 }
 
 export interface EngineDiskEstimate {

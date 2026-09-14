@@ -874,6 +874,7 @@
     "save": "Lưu",
     "reset_default": "Đặt lại về mặc định",
     "listening_label": "Đang nghe…",
+    "no_input": "Không phát hiện âm thanh — hãy kiểm tra micrô",
     "transcribing_label": "Phiên âm…",
     "a11y_setup": "Cho phép Trợ năng để đọc chính tả có thể gõ thay bạn",
     "pasted": "Đã dán",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Phiên âm",
+    "live_title": "Phiên âm trực tiếp",
     "entries": "{{count}} mục",
     "search_placeholder": "Tìm kiếm bản chép lời…",
     "export": "Xuất khẩu",

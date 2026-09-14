@@ -42,21 +42,26 @@ clones best. Without a clip, the engine uses a built-in XTTS speaker.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `OMNIVOICE_XTTS_NEPALI_CHECKPOINT` | `epoch-10` | `epoch-20` sounds closer to the training speaker but generalises less |
+| `OMNIVOICE_XTTS_NEPALI_CHECKPOINT` | `epoch-20` | `epoch-20` has the more natural Nepali intonation; `epoch-10` generalises better to other voices |
 | `OMNIVOICE_XTTS_NEPALI_ROUTE` | `hi` | `hi` sends Nepali as Hindi. `ne` applies the Hindi text cleaners and adds the `[ne]` prefix |
 | `OMNIVOICE_XTTS_NEPALI_MODEL_DIR` | — | Local checkpoint folder. Setting it skips the download |
 | `OMNIVOICE_XTTS_NEPALI_DEVICE` | auto | `cpu` or `cuda` |
 | `OMNIVOICE_XTTS_NEPALI_SPEAKER` | first built-in | Built-in speaker used when no reference clip is given |
-| `OMNIVOICE_XTTS_NEPALI_TEMPERATURE` | `0.7` | Sampling temperature |
-| `OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY` | `10.0` | Higher values discourage repeated sounds |
+| `OMNIVOICE_XTTS_NEPALI_TEMPERATURE` | `1.0` | Higher is more expressive, lower is steadier |
+| `OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY` | `2.0` | Higher values discourage repeated sounds but flatten intonation |
+| `OMNIVOICE_XTTS_NEPALI_TOP_K` | `80` | Sampling pool size |
+| `OMNIVOICE_XTTS_NEPALI_TOP_P` | `0.95` | Nucleus sampling threshold |
 | `OMNIVOICE_XTTS_NEPALI_RECV_TIMEOUT_S` | `600` | Seconds without a sidecar frame before a hung sidecar is killed |
 
 ## Limitations
 
-- Stock coqui-tts has no Nepali text cleaners, and the vocab has no `[ne]` token. The defaults
-  (`hi`, temperature 0.7, repetition penalty 10) match a plain
-  `inference(text, language="hi", temperature=0.7)` call. The model card uses `ne`, 0.65 and 5.0.
-  Compare both by ear.
+- Stock coqui-tts has no Nepali text cleaners, and the vocab has no `[ne]` token. The `ne` route
+  speaks a stray "ne" syllable before the text, so the default route is `hi`.
+- The defaults were tuned for a natural, conversational tone. Pitch variation (the model card's
+  expressiveness measure) rose from 2.42 to 3.74 semitones at the same 3% round-trip character
+  error rate as the old `hi` / 0.7 / 10.0 settings. Natural speech is about 4.95.
+- The reference clip matters most for tone: XTTS copies the reference's delivery. Use 10–15 s of
+  relaxed, conversational Nepali speech, not a short or read-aloud clip.
 - Digits are not expanded to Nepali words. Write numbers as words.
 - Text within the tokenizer's character limit (150 characters for `hi`) is rendered in one pass.
   Longer text is split at the danda (`।`), at `?`, `!` and `.`, with a 0.2 s gap between pieces.

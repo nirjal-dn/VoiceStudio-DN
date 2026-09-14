@@ -1154,6 +1154,7 @@
     "save": "저장",
     "reset_default": "기본값으로 재설정",
     "listening_label": "듣는 중…",
+    "no_input": "소리가 감지되지 않음 — 마이크를 확인하세요",
     "transcribing_label": "받아쓰는 중…",
     "a11y_setup": "받아쓰기가 대신 입력할 수 있도록 손쉬운 사용을 허용하세요",
     "pasted": "붙여넣음",
@@ -1832,6 +1833,7 @@
   },
   "transcriptions": {
     "title": "전사",
+    "live_title": "실시간 받아쓰기",
     "entries": "{{count}} 항목",
     "search_placeholder": "전사본 검색…",
     "export": "내보내기",

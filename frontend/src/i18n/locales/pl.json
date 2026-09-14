@@ -874,6 +874,7 @@
     "save": "Zapisz",
     "reset_default": "Przywróć ustawienia domyślne",
     "listening_label": "Słucham…",
+    "no_input": "Nie wykryto dźwięku — sprawdź mikrofon",
     "transcribing_label": "Transkrypcja…",
     "a11y_setup": "Zezwól na Dostępność, aby dyktowanie mogło pisać za Ciebie",
     "pasted": "Wklejony",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transkrypcje",
+    "live_title": "Transkrypcja na żywo",
     "entries": "{{count}} wpisów",
     "search_placeholder": "Wyszukaj transkrypcje…",
     "export": "Eksportuj",

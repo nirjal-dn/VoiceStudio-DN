@@ -43,6 +43,8 @@ class XttsNepaliBackend(SubprocessBackend):
     _DEFAULT_SAMPLE_RATE = 24_000
     gpu_compat: tuple[str, ...] = ("cuda", "cpu")
     supports_cloning = True
+    # Language the UI selects instead of "Auto" while this engine is active.
+    default_language = "ne"
 
     @classmethod
     def engine_dir(cls) -> Path:

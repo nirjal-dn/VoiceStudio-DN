@@ -874,6 +874,7 @@
     "save": "Kaydet",
     "reset_default": "Varsayılana sıfırla",
     "listening_label": "Dinleniyor...",
+    "no_input": "Ses algılanmadı — mikrofonunuzu kontrol edin",
     "transcribing_label": "Metne dönüştürülüyor…",
     "a11y_setup": "Dikte sizin yerinize yazabilsin diye Erişilebilirlik'e izin verin",
     "pasted": "Yapıştırıldı",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transkripsiyonlar",
+    "live_title": "Canlı transkripsiyon",
     "entries": "{{count}} girişler",
     "search_placeholder": "Transkripsiyonları ara…",
     "export": "İhracat",

@@ -874,6 +874,7 @@
     "save": "保存",
     "reset_default": "デフォルトにリセットする",
     "listening_label": "聞いています…",
+    "no_input": "音声が検出されません — マイクを確認してください",
     "transcribing_label": "文字起こし中…",
     "a11y_setup": "音声入力が代わりに入力できるよう、アクセシビリティを許可してください",
     "pasted": "貼り付けた",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "転写",
+    "live_title": "ライブ文字起こし",
     "entries": "{{count}} エントリ",
     "search_placeholder": "文字起こしを検索…",
     "export": "エクスポート",

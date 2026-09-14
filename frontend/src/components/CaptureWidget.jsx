@@ -17,6 +17,9 @@ import { createWaveform } from './captureWaveform';
 import { emitDictationNotice } from '../utils/dictationNotice';
 import { audioFormatForMimeType, startSupportedMediaRecorder } from '../utils/mediaRecorder';
 import { BROWSER_DICTATION_REQUEST } from '../utils/dictationCapture';
+import { publishDictationLive } from '../utils/dictationLive';
+import { frameHasSound, NO_INPUT_AFTER_MS } from '../utils/inputSound';
+import { useElapsedTimer } from '../hooks/useElapsedTimer';
 
 // True inside the Tauri shell (desktop app / widget window); false in the
 // browser webui / Docker, where the native commands don't exist. Gating on
@@ -394,7 +397,12 @@ export default function CaptureWidget({ onDismiss }) {
   const [transcript, setTranscript] = useState('');
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
+  // Recording time; frozen while paused and once recording ends.
   const [duration, setDuration] = useState(0);
+  useElapsedTimer(state === 'recording' && !paused, setDuration);
+  // No audible frame yet this session: a missing, muted or wrong microphone.
+  const [noInput, setNoInput] = useState(false);
+  const heardRef = useRef(false);
   const [captureMode] = useState(() => localStorage.getItem(LS_CAPTURE_MODE) || 'fast');
   const [, setLastEngine] = useState('');
   const [, setLastTime] = useState(0);
@@ -567,7 +575,6 @@ export default function CaptureWidget({ onDismiss }) {
   const chunksRef = useRef([]);
   const recordingFormatRef = useRef({ mimeType: 'audio/webm', extension: 'webm' });
   const streamRef = useRef(null);
-  const timerRef = useRef(null);
   const wsRef = useRef(null);
   const wsPendingRef = useRef([]);
   const wsHadFinalRef = useRef(false);
@@ -1026,19 +1033,31 @@ export default function CaptureWidget({ onDismiss }) {
     };
   }, [state]);
 
-  // Timer while recording
+  // A recording that has not delivered one audible frame after a few seconds
+  // almost always means a missing, muted or wrong input device: the socket
+  // streams frames and the bars stay flat. Say so instead of "Listening…".
+  // Only the PCM paths see frames; once sound arrives the warning clears.
   useEffect(() => {
-    if (state === 'recording' && !paused) {
-      let previous = Date.now();
-      timerRef.current = setInterval(() => {
-        const now = Date.now();
-        setDuration((elapsed) => elapsed + now - previous);
-        previous = now;
-      }, 100);
-      return () => clearInterval(timerRef.current);
-    }
-    clearInterval(timerRef.current);
-  }, [state, paused]);
+    if (state !== 'recording' || paused || !waveOn) return undefined;
+    const id = setInterval(() => {
+      if (heardRef.current) setNoInput(false);
+      else if (Date.now() - startTimeRef.current >= NO_INPUT_AFTER_MS) setNoInput(true);
+    }, 500);
+    return () => clearInterval(id);
+  }, [state, paused, waveOn]);
+
+  // Share the live session with other views (the Transcriptions page's live
+  // transcript). Whole seconds keep timer updates to one event per second.
+  const elapsedSeconds = Math.floor(duration / 1000);
+  useEffect(() => {
+    publishDictationLive({
+      state,
+      paused,
+      text: partialText,
+      seconds: elapsedSeconds,
+      noInput: state === 'recording' && noInput,
+    });
+  }, [state, paused, partialText, elapsedSeconds, noInput]);
 
   // Waveform poll: 50 ms ≈ 2–3 worklet frames, so bars visibly move well
   // within ~100 ms of mic start. Only runs while the worklet is feeding us.
@@ -1498,6 +1517,7 @@ export default function CaptureWidget({ onDismiss }) {
         typeChainRef.current = Promise.resolve();
         pasteChainRef.current = Promise.resolve();
         waveRef.current.reset();
+        heardRef.current = false;
         if (fallbackTimerRef.current) {
           clearTimeout(fallbackTimerRef.current);
           fallbackTimerRef.current = null;
@@ -1881,6 +1901,7 @@ export default function CaptureWidget({ onDismiss }) {
               (f) => {
                 if (pausedRef.current) return;
                 waveRef.current.push(f);
+                if (!heardRef.current && frameHasSound(f)) heardRef.current = true;
                 sendTagged(f, AEC_NEAR);
               },
               { sampleRate: 16000 },
@@ -1901,6 +1922,7 @@ export default function CaptureWidget({ onDismiss }) {
               (f) => {
                 if (pausedRef.current) return;
                 waveRef.current.push(f);
+                if (!heardRef.current && frameHasSound(f)) heardRef.current = true;
                 const i16 = floatToInt16(f);
                 sendBuf(i16.buffer.slice(i16.byteOffset, i16.byteOffset + i16.byteLength));
               },
@@ -1943,6 +1965,7 @@ export default function CaptureWidget({ onDismiss }) {
         setErrorInfo(null);
         setDoneKind(null);
         setDuration(0);
+        setNoInput(false);
         stateRef.current = 'recording';
         if (holdStartRef.current === 'released') {
           holdStartRef.current = null;
@@ -2293,8 +2316,8 @@ export default function CaptureWidget({ onDismiss }) {
           : t('capture.model_downloading')
         : t('capture.model_loading');
   } else if (state === 'recording') {
-    emoji = '🎙️';
-    label = partialText || t('capture.listening_label');
+    emoji = !partialText && noInput ? '🔇' : '🎙️';
+    label = partialText || (noInput ? t('capture.no_input') : t('capture.listening_label'));
   } else if (state === 'transcribing') {
     emoji = '📝';
     label = partialText || t('capture.transcribing_label');

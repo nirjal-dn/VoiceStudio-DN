@@ -874,6 +874,7 @@
     "save": "Speichern",
     "reset_default": "Auf Standard zurücksetzen",
     "listening_label": "Zuhören…",
+    "no_input": "Kein Ton erkannt – Mikrofon prüfen",
     "transcribing_label": "Transkribieren…",
     "a11y_setup": "Bedienungshilfen erlauben, damit das Diktat für Sie tippen kann",
     "pasted": "Eingefügt",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transkriptionen",
+    "live_title": "Live-Transkription",
     "entries": "{{count}} Einträge",
     "search_placeholder": "Transkriptionen suchen…",
     "export": "Exportieren",

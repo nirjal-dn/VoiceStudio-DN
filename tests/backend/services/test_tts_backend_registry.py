@@ -199,6 +199,9 @@ def test_list_backends_shape(registry_sandbox):
         # Graded-emotion capability (#1208): bool from the class attr; drives
         # the Audiobook expressive panel's emotion gate.
         "supports_emotion",
+        # ISO code the UI selects instead of "Auto" while the engine is active,
+        # or None (the Nepali-only engines declare "ne").
+        "default_language",
         # True when services.sidecar_install can provision the engine in-app
         # (the Settings Install button keys off this).
         "one_click_install",

@@ -2270,6 +2270,9 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
     # Local try-out: Coqui XTTS v2 + Oshara Nepali fine-tune, own venv
     # (coqui-tts pins transformers 4.57). CPML weights are non-commercial.
     "xtts-nepali": ("engines.xtts_nepali", "XttsNepaliBackend"),
+    # AI4Bharat Indic Parler-TTS (Nepali + 20 languages), own venv: parler-tts
+    # pins transformers 4.46.1.
+    "indic-parler-tts": ("engines.indic_parler", "IndicParlerBackend"),
 }
 
 
@@ -2423,6 +2426,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "pockettts":            "docs/engines/pockettts.md",
     "audiocpp":             "docs/engines/audio-cpp.md",
     "xtts-nepali":          "docs/engines/xtts-nepali.md",
+    "indic-parler-tts":     "docs/engines/indic-parler-tts.md",
 }
 
 
@@ -2614,6 +2618,8 @@ def list_backends(*, include_hidden: bool = False) -> list[dict]:
             # Graded-emotion capability (#1208) — drives the Audiobook emotion
             # panel's engine gate. Class attr, defaults False.
             "supports_emotion": bool(getattr(cls, "supports_emotion", False)),
+            # ISO code the UI picks instead of "Auto" while this engine is active.
+            "default_language": getattr(cls, "default_language", None),
             "install_hint": _INSTALL_HINTS.get(bid),
             # Exact `export VAR=...` line for path-gated opt-in engines, or None.
             "setup_snippet": _SETUP_SNIPPETS.get(bid),

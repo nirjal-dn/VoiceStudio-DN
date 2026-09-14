@@ -874,6 +874,7 @@
     "save": "儲存",
     "reset_default": "重設為預設值",
     "listening_label": "正在聽…",
+    "no_input": "未偵測到聲音 — 請檢查麥克風",
     "transcribing_label": "正在抄寫…",
     "a11y_setup": "允許輔助使用，讓聽寫功能為您輸入文字",
     "pasted": "貼上的",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "轉錄",
+    "live_title": "即時轉錄",
     "entries": "{{count}} 條目",
     "search_placeholder": "搜尋轉錄...",
     "export": "出口",

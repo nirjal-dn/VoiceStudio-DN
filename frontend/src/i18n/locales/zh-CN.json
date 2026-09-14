@@ -1107,6 +1107,7 @@
     "save": "保存",
     "reset_default": "恢复默认",
     "listening_label": "正在听……",
+    "no_input": "未检测到声音 — 请检查麦克风",
     "transcribing_label": "正在抄写…",
     "a11y_setup": "允许辅助功能，以便听写为您输入文字",
     "a11y_error": "无法粘贴——需要辅助功能权限",
@@ -1784,6 +1785,7 @@
   },
   "transcriptions": {
     "title": "转录记录",
+    "live_title": "实时转写",
     "entries": "{{count}} 条记录",
     "search_placeholder": "搜索转录记录…",
     "export": "导出",

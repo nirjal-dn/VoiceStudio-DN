@@ -874,6 +874,7 @@
     "save": "Salva",
     "reset_default": "Ripristina le impostazioni predefinite",
     "listening_label": "Ascoltando...",
+    "no_input": "Nessun suono rilevato: controlla il microfono",
     "transcribing_label": "Trascrizione…",
     "a11y_setup": "Consenti Accessibilità così la dettatura può digitare per te",
     "pasted": "Incollato",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Trascrizioni",
+    "live_title": "Trascrizione dal vivo",
     "entries": "{{count}} voci",
     "search_placeholder": "Cerca trascrizioni…",
     "export": "Esportazione",

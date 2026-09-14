@@ -88,3 +88,10 @@ def test_idempotent():
     for raw in ["hello world", "你好世界", "привет", "What?!", "a,  b,"]:
         once = polish_text(raw)
         assert polish_text(once) == once
+
+
+def test_devanagari_sentence_ends_with_danda_not_a_latin_period():
+    from services.text_polish import polish_text
+
+    assert polish_text("मेरो अर्डर कहिले आउँछ") == "मेरो अर्डर कहिले आउँछ।"
+    assert polish_text("धन्यवाद।") == "धन्यवाद।"

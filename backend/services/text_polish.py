@@ -25,7 +25,7 @@ import re
 # the CJK fullwidth forms (U+3002 ideographic full stop, U+FF01 !, U+FF1F ?)
 # and ellipsis. A trailing closing quote/bracket after one of these still
 # counts as terminated ("He said \"hi.\"").
-_TERMINAL = ".!?\u2026\u3002\uff01\uff1f"
+_TERMINAL = ".!?\u2026\u3002\uff01\uff1f\u0964\u0965"
 _CLOSERS = "\"'\u201d\u2019\u00bb\u203a)]}\u300d\u300f\uff09\u3011"
 
 # A dangling clause separator at the very end (ASR often stops mid-breath on
@@ -74,6 +74,12 @@ def polish_text(text: str) -> str:
         if not out:
             return ""
 
-    # Script-matched stop: fullwidth U+3002 when the sentence ends in CJK.
-    out += "\u3002" if _CJK.search(out[-1]) else "."
+    # Script-matched stop: fullwidth U+3002 after CJK, the danda U+0964 after
+    # Devanagari (a Latin "." would break Nepali/Hindi script purity).
+    if _CJK.search(out[-1]):
+        out += "\u3002"
+    elif "\u0900" <= out[-1] <= "\u097f":
+        out += "\u0964"
+    else:
+        out += "."
     return out

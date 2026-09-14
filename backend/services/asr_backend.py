@@ -359,6 +359,9 @@ class ASRBackend(ABC):
     # per-engine notes; an unverified `rocm` claim would route ROCm hosts to a
     # broken GPU path, strictly worse than the honest `cpu_fallback`.)
     gpu_compat: tuple[str, ...] = ("cpu",)
+    # Fast enough for live capture/dictation. When the user pins such an engine,
+    # get_capture_asr_backend() uses it instead of its automatic picks.
+    serves_capture: bool = False
 
     def execution_evidence_loaded(self) -> bool:
         """Whether this instance has live model state worth reporting."""
@@ -2416,12 +2419,21 @@ def _isolated_faster_whisper():
     return IsolatedFasterWhisperBackend
 
 
+def _indic_conformer():
+    """Lazy: engines.indic_conformer imports this module for ASRBackend."""
+    from engines.indic_conformer import IndicConformerBackend
+    return IndicConformerBackend
+
+
 class _LazyASRRegistry(dict):
-    """Registry with one lazily-resolved entry (Wave 4.2). Mirrors the TTS
+    """Registry with lazily-resolved entries (Wave 4.2). Mirrors the TTS
     registry's lazy pattern so listing/selecting the crash-isolated ASR
     backend doesn't import the subprocess stack unless it's used."""
 
-    _LAZY = {"faster-whisper-isolated": _isolated_faster_whisper}
+    _LAZY = {
+        "faster-whisper-isolated": _isolated_faster_whisper,
+        "indic-conformer": _indic_conformer,
+    }
 
     def __contains__(self, key):
         return dict.__contains__(self, key) or key in self._LAZY
@@ -2507,6 +2519,13 @@ _INSTALL_HINTS: dict[str, str] = {
         "transcribes: runs ASR in a separate process that can be force-killed "
         "to reclaim a hung transcribe and its VRAM (#730). Slightly slower per "
         "call than in-process faster-whisper."
+    ),
+    "indic-conformer": (
+        "No extra install (onnxruntime + torch). Downloads the gated "
+        "ai4bharat/indic-conformer-600m-multilingual (~2.4 GB) on first use: "
+        "accept its terms on Hugging Face and set an HF token. Language via "
+        "OMNIVOICE_INDIC_CONFORMER_LANG (default ne); output is in the "
+        "language's native script."
     ),
 }
 
@@ -2613,6 +2632,8 @@ def list_backends() -> list[dict]:
             "last_error": _LAST_ERRORS.get(bid),
             "isolation_mode": isolation,
             "gpu_compat": list(gpu_compat),
+            # ISO code the UI picks instead of "Auto" while this engine is active.
+            "default_language": getattr(cls, "default_language", None),
             **routing,
             "execution_evidence": execution_evidence or execution_snapshot(
                 engine_id=bid,
@@ -2798,6 +2819,18 @@ def get_active_asr_backend(*, asr_pipe=None) -> ASRBackend:
             _ISOLATED_INSTANCES[bid] = inst
         return inst
     return cls()
+
+
+def pinned_whole_recording_engine() -> str | None:
+    """Id of the user-pinned ASR engine when it declares ``whole_recording`` and
+    is available: dictation then transcribes the full recording once, at stop."""
+    if not _asr_backend_pinned():
+        return None
+    bid = active_backend_id()
+    cls = _REGISTRY[bid] if bid in _REGISTRY else None
+    if cls is None or not getattr(cls, "whole_recording", False):
+        return None
+    return bid if cls.is_available()[0] else None
 
 
 def _asr_backend_pinned() -> bool:
@@ -3265,6 +3298,22 @@ def get_capture_asr_backend(*, skip_sherpa: bool = False) -> ASRBackend:
     # Atomic resolve+build so the preload thread and a WS session (which may
     # call get_sherpa_dictation_backend concurrently) can't both build a model.
     with _capture_backend_lock:
+        # A user-pinned engine that declares itself fast enough for capture
+        # (serves_capture) wins over the sherpa dictation pick and the automatic
+        # picks below: the user chose it, and a sherpa model would override it.
+        pinned = active_backend_id() if _asr_backend_pinned() else None
+        pinned_cls = _REGISTRY[pinned] if pinned and pinned in _REGISTRY else None
+        if (
+            pinned_cls is not None
+            and getattr(pinned_cls, "serves_capture", False)
+            and pinned_cls.is_available()[0]
+        ):
+            pinned_key = f"pinned:{pinned}"
+            if not (_capture_backend is not None and _capture_backend_key == pinned_key):
+                _capture_backend = pinned_cls()
+                _capture_backend_key = pinned_key
+            return _capture_backend
+
         # 0. Honor an explicit sherpa dictation model selection.
         sherpa_id = None if skip_sherpa else dictation_model_id()
         if sherpa_id:

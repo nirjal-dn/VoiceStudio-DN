@@ -291,7 +291,11 @@ async def ws_transcribe(websocket: WebSocket):
     # (via ?model= or the dictation.model_id pref) AND sherpa is installed,
     # run the dedicated low-latency handler. Otherwise fall through to the
     # legacy Whisper/WebM path, byte-for-byte unchanged.
-    spec = _select_sherpa_spec(websocket)
+    # A pinned engine that transcribes whole recordings (IndicConformer) owns
+    # the session: no sherpa model, no partials, one transcription at EOF.
+    from services.asr_backend import pinned_whole_recording_engine
+    whole_recording = await asyncio.to_thread(pinned_whole_recording_engine) is not None
+    spec = None if whole_recording else _select_sherpa_spec(websocket)
 
     # TTS-only install: no ASR model on disk for this session's selection →
     # typed error frame + close, BEFORE any recognizer is built (both the
@@ -305,7 +309,7 @@ async def ws_transcribe(websocket: WebSocket):
     # preflight on the same selection execution will use.
     from services.asr_backend import asr_model_missing_detail, asr_model_missing_error
     _requested_model = websocket.query_params.get("model")
-    missing = await asyncio.to_thread(
+    missing = None if whole_recording else await asyncio.to_thread(
         asr_model_missing_error, purpose="dictation",
         sherpa_model_id=(
             spec.id if spec is not None else _requested_model
@@ -468,15 +472,14 @@ async def ws_transcribe(websocket: WebSocket):
             except Exception as e:
                 logger.warning("Partial transcription failed: %s", e)
 
-    # Run receiver and processor concurrently
-    receiver_task = asyncio.create_task(receive_audio())
-    processor_task = asyncio.create_task(process_partials())
+    # Run receiver and processor concurrently. A whole-recording engine gets no
+    # partials and no silence cutoff: the recording ends only when the user stops.
+    tasks = [asyncio.create_task(receive_audio())]
+    if not whole_recording:
+        tasks.append(asyncio.create_task(process_partials()))
 
     # Wait for either to finish (receiver ends on disconnect, processor on silence)
-    done, pending = await asyncio.wait(
-        [receiver_task, processor_task],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     running = False
     for task in pending:
         task.cancel()
@@ -506,6 +509,8 @@ async def ws_transcribe(websocket: WebSocket):
                         result["refined_text"] = refined
                 except Exception as e:  # noqa: BLE001
                     logger.debug("Dictation refinement skipped: %s", e)
+            if whole_recording:
+                result["final_kind"] = "summary"  # sherpa-mode clients finalize on it
             if not await _safe_send({"type": "final", **result}):
                 logger.debug("Skipped final send — client already disconnected")
         except Exception as e:
@@ -515,6 +520,7 @@ async def ws_transcribe(websocket: WebSocket):
     else:
         await _safe_send({
             "type": "final",
+            **({"final_kind": "summary"} if whole_recording else {}),
             "text": "",
             "segments": [],
             "language": "unknown",

@@ -874,6 +874,7 @@
     "save": "Guardar",
     "reset_default": "Restablecer los valores predeterminados",
     "listening_label": "Escuchando…",
+    "no_input": "No se detecta sonido: revisa tu micrófono",
     "transcribing_label": "Transcribiendo…",
     "a11y_setup": "Permite Accesibilidad para que el dictado pueda escribir por ti",
     "pasted": "Pegado",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transcripciones",
+    "live_title": "Transcripción en vivo",
     "entries": "{{count}} entradas",
     "search_placeholder": "Buscar transcripciones…",
     "export": "Exportar",

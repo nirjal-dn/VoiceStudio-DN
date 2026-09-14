@@ -1098,6 +1098,7 @@
     "save": "Save",
     "reset_default": "Reset to default",
     "listening_label": "Listening…",
+    "no_input": "No sound detected — check your microphone",
     "transcribing_label": "Transcribing…",
     "pasted": "Pasted",
     "inserted": "Inserted",
@@ -1786,6 +1787,7 @@
   },
   "transcriptions": {
     "title": "Transcriptions",
+    "live_title": "Live transcription",
     "entries": "{{count}} entries",
     "search_placeholder": "Search transcriptions…",
     "export": "Export",

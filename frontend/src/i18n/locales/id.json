@@ -874,6 +874,7 @@
     "save": "Simpan",
     "reset_default": "Atur ulang ke default",
     "listening_label": "Mendengarkan…",
+    "no_input": "Tidak ada suara terdeteksi — periksa mikrofon Anda",
     "transcribing_label": "Mentranskripsikan…",
     "a11y_setup": "Izinkan Aksesibilitas agar dikte dapat mengetik untuk Anda",
     "pasted": "Ditempel",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transkripsi",
+    "live_title": "Transkripsi langsung",
     "entries": "{{count}} entri",
     "search_placeholder": "Telusuri transkripsi…",
     "export": "Ekspor",

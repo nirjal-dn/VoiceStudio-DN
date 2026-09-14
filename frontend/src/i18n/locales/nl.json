@@ -874,6 +874,7 @@
     "save": "Opslaan",
     "reset_default": "Resetten naar standaard",
     "listening_label": "Luisteren…",
+    "no_input": "Geen geluid gedetecteerd — controleer je microfoon",
     "transcribing_label": "Transcriberen…",
     "a11y_setup": "Sta Toegankelijkheid toe zodat dicteren voor je kan typen",
     "pasted": "Geplakt",
@@ -1529,6 +1530,7 @@
   },
   "transcriptions": {
     "title": "Transcripties",
+    "live_title": "Live transcriptie",
     "entries": "{{count}} vermeldingen",
     "search_placeholder": "Transcripties zoeken…",
     "export": "Exporteren",
