@@ -2267,6 +2267,9 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
     # same import-cycle reason as the entries above (engines.audiocpp
     # imports services.tts_backend for TTSBackend).
     "audiocpp": ("engines.audiocpp", "AudioCPPBackend"),
+    # Local try-out: Coqui XTTS v2 + Oshara Nepali fine-tune, own venv
+    # (coqui-tts pins transformers 4.57). CPML weights are non-commercial.
+    "xtts-nepali": ("engines.xtts_nepali", "XttsNepaliBackend"),
 }
 
 
@@ -2419,6 +2422,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "supertonic3":          "docs/engines/supertonic3.md",
     "pockettts":            "docs/engines/pockettts.md",
     "audiocpp":             "docs/engines/audio-cpp.md",
+    "xtts-nepali":          "docs/engines/xtts-nepali.md",
 }
 
 
