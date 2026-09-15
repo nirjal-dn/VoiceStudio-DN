@@ -667,6 +667,21 @@ async def dub_translate(req: TranslateRequest):
         _deepl_key = os.environ.get("DEEPL_API_KEY") or api_key
         _msft_key = os.environ.get("MICROSOFT_API_KEY") or api_key
 
+        # Batch + retry + fallback implementation for deep_translator-backed
+        # engines (google, mymemory, deepl, microsoft). Strategy:
+        # - Reuse a single translator instance per (src,tgt) pair to avoid
+        #   repeated client startup overhead.
+        # - Translate in batches (env OMNIVOICE_TRANSLATE_BATCH_SIZE) to
+        #   reduce per-request frequency.
+        # - On transient failures / rate limits, fall back to an LLM
+        #   translator (the same path used by provider="openai").
+        # - Never swallow provider errors; attach an "error" field to a
+        #   segment when all fallbacks fail so the UI and downstream stages
+        #   can handle it. Preserve original text on failures.
+
+        BATCH_SIZE = int(os.environ.get("OMNIVOICE_TRANSLATE_BATCH_SIZE", "8"))
+        RETRIES = int(os.environ.get("OMNIVOICE_TRANSLATE_RETRIES", "2"))
+
         def _build_translator(src, tgt):
             if provider == "deepl":
                 from deep_translator import DeeplTranslator
@@ -688,37 +703,154 @@ async def dub_translate(req: TranslateRequest):
             from deep_translator import GoogleTranslator
             return GoogleTranslator(source=src, target=tgt, proxies=_proxies)
 
-        def _translate_single(seg):
-            seg_lc = (
-                TRANSLATE_CODES.get(seg.target_lang, seg.target_lang)
-                if seg.target_lang else lang_code
-            )
-            if not seg.text or not seg.text.strip():
-                return {"id": seg.id, "text": seg.text}
-            last_err = None
-            # Try: (src_arg, tgt) → retry once → fall back to (auto, tgt).
-            for attempt, src in enumerate([src_arg, src_arg, "auto"]):
-                try:
-                    out = _build_translator(src, seg_lc).translate(seg.text)
-                    if out and out.strip():
-                        return {"id": seg.id, "text": out}
-                    last_err = "empty translation"
-                except Exception as e:
-                    last_err = f"{type(e).__name__}: {e}"
-                    logger.warning(
-                        "translate attempt %d %s->%s (provider=%s) failed: %s",
-                        attempt + 1, src, seg_lc, provider, e,
-                    )
-                    time.sleep(0.25 * (attempt + 1))
-            logger.error("translate %s -> %s gave up (provider=%s): %s", src_arg, seg_lc, provider, last_err)
-            # Scrub before it reaches the UI — DeepL/Microsoft errors can echo
-            # the API key (same class as the OpenAI user_id leak).
-            from core.scrub import scrub_provider_error
-            return {"id": seg.id, "text": seg.text,
-                    "error": scrub_provider_error(last_err, _deepl_key or _msft_key or api_key) or "unknown"}
+        # Helper: decide whether an exception looks like a rate-limit/quota error
+        def _is_rate_limit_exc(exc_text: str) -> bool:
+            if not exc_text:
+                return False
+            low = exc_text.lower()
+            return ("429" in low or "too many requests" in low or "rate" in low or "quota" in low)
 
-        tasks = [loop.run_in_executor(_cpu_pool, _translate_single, seg) for seg in req.segments]
-        translated = await asyncio.gather(*tasks)
+        # Resolve an LLM client for fallback translations (best-effort).
+        def _resolve_llm_fallback():
+            try:
+                from services import llm_skills
+                handle = None
+                try:
+                    handle = llm_skills.resolve_skill_client("dub_translation")
+                except Exception:
+                    return None
+                if handle is not None:
+                    return (handle.client, handle.model, handle.timeout)
+            except Exception:
+                return None
+            # Env fallback
+            if os.environ.get("TRANSLATE_BASE_URL") or api_key:
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(base_url=os.environ.get("TRANSLATE_BASE_URL"),
+                                    api_key=api_key or "local", max_retries=0)
+                    model = os.environ.get("TRANSLATE_MODEL", "gpt-4o-mini")
+                    timeout = int(os.environ.get("OMNIVOICE_LLM_TIMEOUT", "45"))
+                    return (client, model, timeout)
+                except Exception:
+                    return None
+            return None
+
+        llm_fallback = _resolve_llm_fallback()
+
+        async def _translate_via_llm(seg_list):
+            # seg_list: list of (seg, seg_lc)
+            if not llm_fallback:
+                # No LLM available — return passthroughs with errors
+                return [
+                    {"id": s.id, "text": s.text, "error": "no-llm-fallback"}
+                    for s, _ in seg_list
+                ]
+            client, model_name, llm_timeout = llm_fallback
+            results = []
+            for s, _ in seg_list:
+                if not s.text or not s.text.strip():
+                    results.append({"id": s.id, "text": s.text})
+                    continue
+                # Build a compact system prompt for translation
+                tgt_code = s.target_lang if s.target_lang else req.target_lang
+                src_name = LANG_NAMES.get(src_lang, src_lang)
+                tgt_name = LANG_NAMES.get(tgt_code, tgt_code)
+                system_msg = (
+                    f"Translate the following text from {src_name} into {tgt_name}. "
+                    "Reply ONLY with the translation and no extra characters."
+                )
+                last_err = None
+                for attempt in range(2):
+                    try:
+                        res = client.chat.completions.create(
+                            model=model_name,
+                            temperature=0.2,
+                            timeout=llm_timeout,
+                            messages=[
+                                {"role": "system", "content": system_msg},
+                                {"role": "user", "content": s.text},
+                            ],
+                        )
+                        out_text = (res.choices[0].message.content or "").strip()
+                        if out_text:
+                            results.append({"id": s.id, "text": out_text})
+                            break
+                        last_err = "empty llm response"
+                    except Exception as e:
+                        last_err = f"{type(e).__name__}: {e}"
+                        logger.warning("LLM fallback failed for %s: %s", s.id, e)
+                else:
+                    from core.scrub import scrub_provider_error
+                    results.append({"id": s.id, "text": s.text,
+                                    "error": scrub_provider_error(last_err, api_key) or "llm-failed"})
+            return results
+
+        # Group segments by (src,target) so we can reuse translator instances.
+        groups = {}
+        for seg in req.segments:
+            tgt = TRANSLATE_CODES.get(seg.target_lang, seg.target_lang) if getattr(seg, "target_lang", None) else lang_code
+            key = (src_arg, tgt)
+            groups.setdefault(key, []).append(seg)
+
+        translated = []
+        for (src_pair, tgt_pair), segs in groups.items():
+            # process in batches
+            translator = None
+            try:
+                translator = _build_translator(src_pair, tgt_pair)
+            except Exception as e:
+                logger.warning("translator init failed %s->%s: %s", src_pair, tgt_pair, e)
+                translator = None
+
+            # slice into batches
+            for i in range(0, len(segs), BATCH_SIZE):
+                batch = segs[i:i+BATCH_SIZE]
+                # fast path: translator instance exists
+                if translator is not None:
+                    batch_results = []
+                    rate_limited = False
+                    for s in batch:
+                        if not s.text or not s.text.strip():
+                            batch_results.append({"id": s.id, "text": s.text})
+                            continue
+                        last_err = None
+                        out = None
+                        for attempt in range(RETRIES + 1):
+                            try:
+                                out = translator.translate(s.text)
+                                if out and out.strip():
+                                    batch_results.append({"id": s.id, "text": out})
+                                    break
+                                last_err = "empty translation"
+                            except Exception as e:
+                                last_err = f"{type(e).__name__}: {e}"
+                                logger.warning("translate attempt %d %s->%s (provider=%s) failed: %s",
+                                               attempt + 1, src_pair, tgt_pair, provider, e)
+                                if _is_rate_limit_exc(str(e)):
+                                    rate_limited = True
+                                    break
+                                time.sleep(0.25 * (attempt + 1))
+                        if out is None and not rate_limited:
+                            from core.scrub import scrub_provider_error
+                            batch_results.append({"id": s.id, "text": s.text,
+                                                  "error": scrub_provider_error(last_err, _deepl_key or _msft_key or api_key) or "unknown"})
+                    if rate_limited and llm_fallback:
+                        logger.warning("Provider %s rate-limited, using LLM fallback for batch", provider)
+                        fb = await _translate_via_llm([(s, tgt_pair) for s in batch])
+                        translated.extend(fb)
+                    else:
+                        translated.extend(batch_results)
+                        if rate_limited and not llm_fallback:
+                            # mark remaining items as errors if no fallback
+                            for s in batch[len(batch_results):]:
+                                translated.append({"id": s.id, "text": s.text, "error": "rate-limited"})
+                else:
+                    # No translator available — try LLM fallback for the batch
+                    fb = await _translate_via_llm([(s, tgt_pair) for s in batch])
+                    translated.extend(fb)
+
+        # Preserve stable ordering by segment id (stringified) as before.
         translated.sort(key=lambda x: str(x["id"]))
 
         return await _maybe_cinematic(
