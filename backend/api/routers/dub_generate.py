@@ -205,10 +205,16 @@ def _sync_job_segments(job: dict, req: DubRequest) -> None:
     # falls back to `job["segments"]`.
     lang = (req.language_code or "und").strip() or "und"
     i18n = job.setdefault("segments_i18n", {})
-    i18n[lang] = {
-        (str(row["id"]) if row.get("id") is not None else str(i)): row["text"]
-        for i, row in enumerate(merged)
-    }
+    # Only persist per-language text for segments that translated successfully
+    # (no `error` field). This prevents a failed translation from being
+    # cached as a successful generated track when the frontend falls back to
+    # sending translated rows that actually carry an error marker.
+    i18n[lang] = {}
+    for i, row in enumerate(merged):
+        key = (str(row["id"]) if row.get("id") is not None else str(i))
+        text = row.get("text")
+        if text and not row.get("error"):
+            i18n[lang][key] = text
 
 
 def _seg_hashes_by_lang(job: dict) -> dict:
