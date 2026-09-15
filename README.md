@@ -130,6 +130,17 @@ bun install
 bun run desktop
 ```
 
+### After cloning: install required models (optional)
+
+If you cloned the repo for development or to run the backend from source, install the required models so ASR/TTS/LLM engines work locally:
+
+```bash
+source .venv/bin/activate  # or your venv
+python scripts/bootstrap_models.py
+```
+
+This downloads models marked `required: true` in [backend/config/models.yaml](backend/config/models.yaml).
+
 The desktop launcher configures Python dependencies on first run via `uv` automatically. Use `bun run dev` for the browser UI. See [Contributing](.github/CONTRIBUTING.md) for services, tests, and platform packages.
 
 ### If setup fails
