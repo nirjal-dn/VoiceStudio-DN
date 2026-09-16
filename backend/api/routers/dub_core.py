@@ -1123,7 +1123,10 @@ async def dub_transcribe_stream(
                             preflight_error = asr_model_missing_detail(e.payload)
                             preflight_payload = e.payload
                         except Exception as e:
-                            logger.error("Transcription preflight ASR load failed")
+                            logger.exception(
+                                "Transcription preflight ASR load failed: %s",
+                                e,
+                            )
                             from core.failure import build_failure
                             f = build_failure(e, stage="transcribe-preflight", include_diagnostic=False)
                             preflight_error = "ASR backend initialization failed: " + f["reason"] + (

@@ -94,6 +94,13 @@ models:
     curated_on: [rocm]
     note: "CTranslate2 has no ROCm backend, so on AMD GPUs this PyTorch build is the accelerated route."
 
+  - repo_id: "openai/whisper-large-v2"
+    label: "Whisper large-v2 (OpenAI — legacy high-quality ASR)"
+    role: ASR
+    engines: [pytorch-whisper]
+    size_gb: 2.9
+    note: "Previous-generation OpenAI Whisper large model for compatibility and legacy local transcription workloads."
+
   - repo_id: "mlx-community/whisper-tiny-mlx"
     label: "Whisper tiny (MLX ASR — fast fallback)"
     role: ASR
