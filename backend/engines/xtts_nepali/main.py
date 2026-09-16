@@ -100,8 +100,129 @@ _LANG_ALIASES = {
 _ZERO_WIDTH_RE = re.compile("[​‌‍⁠﻿]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[।॥?!])\s*|(?<=\.)\s+")
 
+_NE_NUMBER_WORDS = (
+    "शून्य", "एक", "दुई", "तीन", "चार", "पाँच", "छ", "सात", "आठ", "नौ",
+    "दश", "एघार", "बाह्र", "तेह्र", "चौध", "पन्ध्र", "सोह्र", "सत्र", "अठार",
+    "उन्नाइस",
+)
+_NE_TENS = (
+    "", "", "बीस", "तीस", "चालीस", "पचास", "साठी", "सत्तरी", "असी", "नब्बे",
+)
+_NE_20_TO_99 = {
+    21: "एक्काइस", 22: "बाइस", 23: "तेइस", 24: "चौबीस", 25: "पच्चीस",
+    26: "छब्बीस", 27: "सत्ताइस", 28: "अठ्ठाइस", 29: "उनन्तीस",
+    31: "एकतीस", 32: "बत्तीस", 33: "तेत्तीस", 34: "चौँतीस", 35: "पैँतीस",
+    36: "छत्तीस", 37: "सैँतीस", 38: "अठतीस", 39: "उनन्चालीस",
+    41: "एकचालीस", 42: "बयालीस", 43: "त्रिचालीस", 44: "चवालीस", 45: "पैँतालीस",
+    46: "छयालीस", 47: "सतचालीस", 48: "अठचालीस", 49: "उनन्चास",
+    51: "एकाउन्न", 52: "बाउन्न", 53: "त्रिपन्न", 54: "चउन्न", 55: "पचपन्न",
+    56: "छपन्न", 57: "सन्ताउन्न", 58: "अन्ठाउन्न", 59: "उनन्साठी",
+    61: "एकसट्ठी", 62: "बयसट्ठी", 63: "त्रिसट्ठी", 64: "चौंसट्ठी", 65: "पैंसट्ठी",
+    66: "छयसट्ठी", 67: "सतसट्ठी", 68: "अठसट्ठी", 69: "उनन्सत्तरी",
+    71: "एकहत्तर", 72: "बहत्तर", 73: "त्रिहत्तर", 74: "चौहत्तर", 75: "पचहत्तर",
+    76: "छयहत्तर", 77: "सतहत्तर", 78: "अठहत्तर", 79: "उनासी",
+    81: "एकासी", 82: "बयासी", 83: "त्रियासी", 84: "चौरासी", 85: "पचासी",
+    86: "छयासी", 87: "सतासी", 88: "अठासी", 89: "उनान्नब्बे",
+    91: "एकान्नब्बे", 92: "बयानब्बे", 93: "त्रियान्नब्बे", 94: "चौरान्नब्बे",
+    95: "पन्चानब्बे", 96: "छयान्नब्बे", 97: "सन्तानब्बे", 98: "अन्ठान्नब्बे",
+    99: "उनान्सय",
+}
+_NE_MONTHS = {
+    1: "जनवरी", 2: "फेब्रुअरी", 3: "मार्च", 4: "अप्रिल", 5: "मे", 6: "जुन",
+    7: "जुलाई", 8: "अगस्ट", 9: "सेप्टेम्बर", 10: "अक्टोबर", 11: "नोभेम्बर",
+    12: "डिसेम्बर",
+}
+_NE_ACRONYM_LETTERS = {
+    "A": "ए", "B": "बी", "C": "सी", "D": "डी", "E": "ई", "F": "एफ",
+    "G": "जी", "H": "एच", "I": "आई", "J": "जे", "K": "के", "L": "एल",
+    "M": "एम", "N": "एन", "O": "ओ", "P": "पी", "Q": "क्यू", "R": "आर",
+    "S": "एस", "T": "टी", "U": "यू", "V": "भी", "W": "डब्ल्यू", "X": "एक्स",
+    "Y": "वाई", "Z": "जेड",
+}
+_DATE_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b")
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_DECIMAL_RE = re.compile(r"\b\d+[.,]\d+\b")
+_INTEGER_RE = re.compile(r"\b\d+\b")
+_ACRONYM_RE = re.compile(r"\b[A-Z]{2,8}\b")
+
 _MODEL = None
 _voice_cache: OrderedDict[str, tuple] = OrderedDict()
+
+
+def _ne_under_hundred(value: int) -> str:
+    if value < 20:
+        return _NE_NUMBER_WORDS[value]
+    if value in _NE_20_TO_99:
+        return _NE_20_TO_99[value]
+    return _NE_TENS[value // 10] + (f" {_NE_NUMBER_WORDS[value % 10]}" if value % 10 else "")
+
+
+def _ne_number(value: int) -> str:
+    """Render common cardinal numbers in Nepali words without dependencies."""
+    if value < 100:
+        return _ne_under_hundred(value)
+    if value < 1000:
+        rest = value % 100
+        return f"{_NE_NUMBER_WORDS[value // 100]} सय" + (
+            f" {_ne_under_hundred(rest)}" if rest else ""
+        )
+    if value < 100000:
+        rest = value % 1000
+        return f"{_ne_under_hundred(value // 1000)} हजार" + (
+            f" {_ne_number(rest)}" if rest else ""
+        )
+    if value < 10000000:
+        rest = value % 100000
+        return f"{_ne_number(value // 100000)} लाख" + (
+            f" {_ne_number(rest)}" if rest else ""
+        )
+    rest = value % 10000000
+    return f"{_ne_number(value // 10000000)} करोड" + (
+        f" {_ne_number(rest)}" if rest else ""
+    )
+
+
+def _ne_digits(value: str) -> str:
+    return " ".join(_NE_NUMBER_WORDS[int(d)] for d in value)
+
+
+def _normalize_nepali_text(text: str) -> str:
+    """Make numeric and acronym tokens speakable on the Hindi XTTS route."""
+    def iso_date(match: re.Match[str]) -> str:
+        year, month, day = (int(group) for group in match.groups())
+        month_name = _NE_MONTHS.get(month)
+        if not month_name or not 1 <= day <= 31:
+            return match.group(0)
+        return f"{_ne_number(day)} {month_name} {_ne_number(year)}"
+
+    def slash_date(match: re.Match[str]) -> str:
+        day, month, year = (int(group) for group in match.groups())
+        if year < 100:
+            year += 2000
+        month_name = _NE_MONTHS.get(month)
+        if not month_name or not 1 <= day <= 31:
+            return match.group(0)
+        return f"{_ne_number(day)} {month_name} {_ne_number(year)}"
+
+    def decimal(match: re.Match[str]) -> str:
+        whole, fraction = re.split(r"[.,]", match.group(0), maxsplit=1)
+        return f"{_ne_number(int(whole))} दशमलव {_ne_digits(fraction)}"
+
+    def integer(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        if len(raw) > 8:
+            return _ne_digits(raw)
+        return _ne_number(int(raw))
+
+    text = _ISO_DATE_RE.sub(iso_date, text)
+    text = _DATE_RE.sub(slash_date, text)
+    text = _DECIMAL_RE.sub(decimal, text)
+    text = _INTEGER_RE.sub(integer, text)
+
+    def acronym(match: re.Match[str]) -> str:
+        return " ".join(_NE_ACRONYM_LETTERS[ch] for ch in match.group(0))
+
+    return _ACRONYM_RE.sub(acronym, text)
 
 
 # -- wire protocol -----------------------------------------------------------
@@ -351,6 +472,8 @@ def _handle_synthesize(msg: dict, stdout) -> None:
 
     language = _xtts_language(msg.get("language"), model.config.languages)
     route = "hi" if language == "ne" and _NE_ROUTE == "hi" else language
+    if language == "ne" and route == "hi":
+        text = _normalize_nepali_text(text)
     # XTTS asserts text_tokens.shape[-1] < gpt_max_text_tokens. Leave one
     # token of headroom because the tokenizer adds language/special tokens.
     max_tokens = int(getattr(model.args, "gpt_max_text_tokens", 400))

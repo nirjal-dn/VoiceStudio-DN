@@ -34,6 +34,14 @@ On Windows, the interpreter is at `.venv\Scripts\python.exe`.
 The ~1.9 GB checkpoint downloads from Hugging Face on the first generate. After that it
 loads from the cache.
 
+Before Nepali synthesis, numeric dates, decimals, and cardinal numbers are converted
+to Nepali words so the Hindi tokenizer does not have to guess how to read Arabic
+digits. Short all-capital acronyms are spelled as Nepali letter names (for example,
+`API` becomes `ए पी आई`). For ordinary English words, use the pronunciation
+dictionary or an inline override when a specific Nepali pronunciation is needed;
+automatic transliteration is intentionally not guessed because English spelling is
+not phonetic.
+
 ## Use
 
 Select **XTTS v2 Nepali** in the Engines panel (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>E</kbd>),
