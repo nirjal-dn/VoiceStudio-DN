@@ -2345,6 +2345,18 @@ _REGISTRY: dict[str, type[TTSBackend]] = _LazyRegistry({
     "sherpa-onnx":   SherpaOnnxBackend,
 })
 
+# Compatibility names used by the standalone Oshara prototype and older
+# clients. The catalogue continues to expose only the canonical engine id.
+_ENGINE_ALIASES: dict[str, str] = {
+    "oshara-xtts-v2": "xtts-nepali",
+}
+
+
+def canonical_engine_id(backend_id: str) -> str:
+    """Map legacy engine names to the id used by the backend registry."""
+    normalized = str(backend_id).strip().lower()
+    return _ENGINE_ALIASES.get(normalized, normalized)
+
 
 # ── ENGINE-06 last-error cache ─────────────────────────────────────────────
 #
@@ -2704,6 +2716,7 @@ def _effective_backend_class(
 
 
 def get_backend_class(backend_id: str) -> type[TTSBackend]:
+    backend_id = canonical_engine_id(backend_id)
     if backend_id not in _REGISTRY:
         raise ValueError(f"Unknown TTS backend: {backend_id!r}. Known: {list(_REGISTRY)}")
     return _effective_backend_class(backend_id, _REGISTRY[backend_id])
@@ -2792,7 +2805,9 @@ def active_backend_id() -> str:
     # Env var > persisted UI choice > default. Env wins so power-users can
     # pin a backend without the Settings picker silently undoing it.
     from core import prefs
-    return prefs.resolve("tts_backend", env="OMNIVOICE_TTS_BACKEND", default="omnivoice")
+    return canonical_engine_id(
+        prefs.resolve("tts_backend", env="OMNIVOICE_TTS_BACKEND", default="omnivoice")
+    )
 
 
 # Cached active backend instance + its id (MM2-01). Without this, every call

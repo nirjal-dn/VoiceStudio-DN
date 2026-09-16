@@ -2,6 +2,9 @@
 
 Engine id: `xtts-nepali` · subprocess sidecar with its own venv · CPU or CUDA · 24 kHz
 
+The legacy request id `oshara-xtts-v2` is accepted as an alias and normalized to
+`xtts-nepali`; new clients should use the canonical id.
+
 Runs [`Oshara/xtts-v2-nepali`](https://huggingface.co/Oshara/xtts-v2-nepali), a fine-tune of
 Coqui XTTS v2 that adds Nepali (`ne`), with zero-shot voice cloning from a reference clip.
 The 17 base XTTS v2 languages remain selectable.
@@ -42,15 +45,15 @@ clones best. Without a clip, the engine uses a built-in XTTS speaker.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `OMNIVOICE_XTTS_NEPALI_CHECKPOINT` | `epoch-20` | `epoch-20` has the more natural Nepali intonation; `epoch-10` generalises better to other voices |
+| `OMNIVOICE_XTTS_NEPALI_CHECKPOINT` | `epoch-20` | Better default for natural Nepali prosody; `epoch-10` matches the standalone Oshara script |
 | `OMNIVOICE_XTTS_NEPALI_ROUTE` | `hi` | `hi` sends Nepali as Hindi. `ne` applies the Hindi text cleaners and adds the `[ne]` prefix |
 | `OMNIVOICE_XTTS_NEPALI_MODEL_DIR` | — | Local checkpoint folder. Setting it skips the download |
 | `OMNIVOICE_XTTS_NEPALI_DEVICE` | auto | `cpu` or `cuda` |
 | `OMNIVOICE_XTTS_NEPALI_SPEAKER` | first built-in | Built-in speaker used when no reference clip is given |
-| `OMNIVOICE_XTTS_NEPALI_TEMPERATURE` | `1.0` | Higher is more expressive, lower is steadier |
-| `OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY` | `2.0` | Higher values discourage repeated sounds but flatten intonation |
-| `OMNIVOICE_XTTS_NEPALI_TOP_K` | `80` | Sampling pool size |
-| `OMNIVOICE_XTTS_NEPALI_TOP_P` | `0.95` | Nucleus sampling threshold |
+| `OMNIVOICE_XTTS_NEPALI_TEMPERATURE` | `0.7` | Higher is more expressive, lower is steadier |
+| `OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY` | `10.0` | Higher values discourage repeated sounds but flatten intonation |
+| `OMNIVOICE_XTTS_NEPALI_TOP_K` | `50` | Sampling pool size |
+| `OMNIVOICE_XTTS_NEPALI_TOP_P` | `0.85` | Nucleus sampling threshold |
 | `OMNIVOICE_XTTS_NEPALI_RECV_TIMEOUT_S` | `600` | Seconds without a sidecar frame before a hung sidecar is killed |
 
 ## Limitations

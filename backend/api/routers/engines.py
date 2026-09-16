@@ -347,6 +347,7 @@ def _resolve_engine_class(engine_id: str):
     tts → asr → llm so the most-common case (TTS engine matrix) wins
     early. No collision risk today — all current ids are family-unique.
     """
+    engine_id = tts_backend.canonical_engine_id(engine_id)
     for registry in (
         tts_backend._REGISTRY,
         asr_backend._REGISTRY,
@@ -659,20 +660,25 @@ def select_engine(req: SelectEngineRequest):
         if req.family == "tts"
         else module.list_backends()
     )
+    backend_id = (
+        tts_backend.canonical_engine_id(req.backend_id)
+        if req.family == "tts"
+        else req.backend_id
+    )
     available = {b["id"]: b for b in rows}
-    if req.backend_id not in available:
+    if backend_id not in available:
         raise HTTPException(400, f"Unknown {req.family} backend: {req.backend_id!r}")
-    entry = available[req.backend_id]
+    entry = available[backend_id]
     if not entry["available"]:
         reason = entry.get("reason") or "unavailable"
-        raise HTTPException(400, f"Backend {req.backend_id} not ready: {reason}")
+        raise HTTPException(400, f"Backend {backend_id} not ready: {reason}")
     # Host-routing gate (no silent CPU fallback). `.get` is defensive so an
     # older/legacy payload without routing keys still selects cleanly.
     if entry.get("routing_status") == "unavailable":
         why = entry.get("routing_reason") or "requires a GPU this host doesn't have"
         raise HTTPException(
             400,
-            f"Backend {req.backend_id} can't run on this machine: {why}. "
+            f"Backend {backend_id} can't run on this machine: {why}. "
             f"Pick an engine with a CPU path, or one that supports this host's GPU.",
         )
     # #981: mlx-audio multiplexes 7+ curated models behind one backend id —
@@ -693,7 +699,7 @@ def select_engine(req: SelectEngineRequest):
                 "Hugging Face repo ID like 'owner/name'.",
             )
         prefs.set_("mlx_audio_model_id", req.model_id)
-    prefs.set_(pref_key, req.backend_id)
+    prefs.set_(pref_key, backend_id)
     return {
         "family": req.family,
         "active": module.active_backend_id(),

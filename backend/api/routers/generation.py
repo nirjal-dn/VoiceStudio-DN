@@ -1413,10 +1413,11 @@ async def generate_speech(
     # `model`. Omitting both keeps the historical default (VoiceStudio), so
     # existing API consumers see no change.
     from services.tts_backend import (
-        OmniVoiceBackend, _mask_hf_tokens, active_backend_id, get_backend_class,
+        OmniVoiceBackend, _mask_hf_tokens, active_backend_id, canonical_engine_id,
+        get_backend_class,
     )
 
-    engine_id = engine or active_backend_id()
+    engine_id = canonical_engine_id(engine or active_backend_id())
     try:
         backend_cls = get_backend_class(engine_id)
     except ValueError:

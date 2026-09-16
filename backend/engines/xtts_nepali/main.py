@@ -21,27 +21,24 @@ config lists ``ne``. ``OMNIVOICE_XTTS_NEPALI_ROUTE`` picks how Nepali reaches th
 GPT: ``hi`` (default) sends it as plain Hindi; ``ne`` runs the Hindi cleaners and
 keeps the ``[ne]`` prefix, as the model card's ``language="ne"`` implies.
 
-Defaults were picked for a natural, conversational delivery by measuring pitch
-variation (F0 std, the model card's expressiveness metric) and round-trip
-intelligibility (IndicConformer CER) across presets: the epoch-20 checkpoint
-with temperature 1.0, repetition_penalty 2.0, top_k 80, top_p 0.95 raised F0
-std from 2.42 to 3.74 semitones at the same 3% CER as the old
-``hi``/0.7/10.0 settings. The ``ne`` route speaks a stray "ne" syllable before
-the text, so ``hi`` stays the default.
+The defaults follow the standalone Oshara example and Coqui XTTS's steadier
+sampling defaults. Lower temperature and a stronger repetition penalty reduce
+pitch drift, robotic emphasis, and repeated phonemes in Nepali. The ``ne``
+route speaks a stray "ne" syllable before the text, so ``hi`` stays the default.
 
-Text within the tokenizer's per-language character limit goes to the GPT in one
-pass. Longer text is split on the danda / sentence punctuation under that limit,
-with a short gap between pieces, per the model card's advice against the GPT
-drifting between sentences.
+Text is split on sentence and word boundaries using the tokenizer's actual token
+count, keeping every piece below XTTS's GPT limit. This is important for
+Devanagari, where a modest character count can expand into many tokens.
 
-Other knobs: ``OMNIVOICE_XTTS_NEPALI_CHECKPOINT`` (``epoch-20`` default, ``epoch-10``
-generalises to other voices better), ``OMNIVOICE_XTTS_NEPALI_MODEL_DIR`` (local checkpoint folder,
-skips the download), ``OMNIVOICE_XTTS_NEPALI_DEVICE`` (``cpu``/``cuda``),
+Other knobs: ``OMNIVOICE_XTTS_NEPALI_CHECKPOINT`` (``epoch-20`` default for
+more natural Nepali prosody; ``epoch-10`` matches the standalone Oshara script),
+``OMNIVOICE_XTTS_NEPALI_MODEL_DIR`` (local checkpoint folder, skips the download),
+``OMNIVOICE_XTTS_NEPALI_DEVICE`` (``cpu``/``cuda``),
 ``OMNIVOICE_XTTS_NEPALI_SPEAKER`` (built-in speaker used when no reference clip
-is given), ``OMNIVOICE_XTTS_NEPALI_TEMPERATURE`` (default 1.0),
-``OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY`` (default 2.0),
-``OMNIVOICE_XTTS_NEPALI_TOP_K`` (default 80), ``OMNIVOICE_XTTS_NEPALI_TOP_P``
-(default 0.95).
+is given), ``OMNIVOICE_XTTS_NEPALI_TEMPERATURE`` (default 0.7),
+``OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY`` (default 10.0),
+``OMNIVOICE_XTTS_NEPALI_TOP_K`` (default 50), ``OMNIVOICE_XTTS_NEPALI_TOP_P``
+(default 0.85).
 """
 from __future__ import annotations
 
@@ -55,6 +52,13 @@ import threading
 import traceback
 from collections import OrderedDict
 
+# Coqui's XTTS loader uses torchaudio to read reference clips. Newer
+# torchaudio versions prefer torchcodec, but this environment can contain a
+# codec wheel linked against CUDA libraries even when PyTorch is CPU-only.
+# Keep the legacy preference enabled; the actual reference decoder is patched
+# below because recent Coqui releases require torchcodec to be importable.
+os.environ.setdefault("TORCHAUDIO_USE_TORCHCODEC", "0")
+
 # Mirrors services/subprocess_backend.py::MAX_FRAME_BYTES.
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 
@@ -65,10 +69,10 @@ _CHECKPOINT = os.environ.get("OMNIVOICE_XTTS_NEPALI_CHECKPOINT", "epoch-20").str
 _NE_ROUTE = os.environ.get("OMNIVOICE_XTTS_NEPALI_ROUTE", "hi").strip().lower()
 
 #: Sampling defaults tuned for a natural, conversational delivery (see docstring).
-_TEMPERATURE = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TEMPERATURE", "1.0"))
-_REPETITION_PENALTY = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY", "2.0"))
-_TOP_K = int(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_K", "80"))
-_TOP_P = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_P", "0.95"))
+_TEMPERATURE = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TEMPERATURE", "0.7"))
+_REPETITION_PENALTY = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY", "10.0"))
+_TOP_K = int(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_K", "50"))
+_TOP_P = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_P", "0.85"))
 
 #: Silence between split pieces, in seconds.
 _GAP_S = 0.2
@@ -189,6 +193,26 @@ def _patch_nepali_tokenizer(tokenizer) -> None:
     tokenizer.char_limits.setdefault("ne", tokenizer.char_limits.get("hi", 150))
 
 
+def _patch_reference_audio_loader() -> None:
+    """Read reference clips without torchcodec's native CUDA dependencies."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    import torchaudio
+    from TTS.tts.models import xtts as xtts_module
+
+    def load_audio(path, target_sr):
+        samples, source_sr = sf.read(path, dtype="float32", always_2d=True)
+        audio = torch.from_numpy(np.asarray(samples).T.copy())
+        if audio.shape[0] > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        if source_sr != target_sr:
+            audio = torchaudio.functional.resample(audio, source_sr, target_sr)
+        return audio
+
+    xtts_module.load_audio = load_audio
+
+
 def _load_model(stdout):
     global _MODEL
     if _MODEL is not None:
@@ -209,13 +233,11 @@ def _load_model(stdout):
         model = Xtts.init_from_config(config)
         model.load_checkpoint(
             config,
-            checkpoint_path=os.path.join(model_dir, "model.pth"),
-            vocab_path=os.path.join(model_dir, "vocab.json"),
-            speaker_file_path=os.path.join(model_dir, "speakers_xtts.pth"),
-            eval=True,
+            checkpoint_dir=model_dir,
             use_deepspeed=False,
         )
         model.to(_device())
+        _patch_reference_audio_loader()
         _patch_nepali_tokenizer(model.tokenizer)
         _MODEL = model
     return model
@@ -271,23 +293,41 @@ def _voice_latents(model, ref_audio):
     return entry["gpt_cond_latent"], entry["speaker_embedding"]
 
 
-def _chunks(text: str, limit: int) -> list[str]:
-    """Sentence pieces no longer than ``limit`` characters, speakable ones only."""
+def _chunks(text: str, tokenizer, language: str, token_limit: int) -> list[str]:
+    """Split text without exceeding XTTS's token limit or dropping text."""
     text = re.sub(r"\s+", " ", _ZERO_WIDTH_RE.sub("", text)).strip()
-    if len(text) <= limit:
-        return [text] if any(ch.isalnum() for ch in text) else []
     out: list[str] = []
     for sent in _SENTENCE_SPLIT_RE.split(text):
         sent = sent.strip()
-        while len(sent) > limit:
-            cut = max(sent.rfind(",", 0, limit), sent.rfind(" ", 0, limit))
-            if cut <= 0:
-                cut = limit - 1
-            head, sent = sent[: cut + 1].strip(), sent[cut + 1 :].strip()
-            if head:
-                out.append(head)
-        if sent:
-            out.append(sent)
+        if not sent:
+            continue
+        words = re.findall(r"\S+\s*", sent)
+        current = ""
+        for word in words:
+            candidate = f"{current}{word}"
+            if len(tokenizer.encode(candidate.strip(), lang=language)) < token_limit:
+                current = candidate
+                continue
+            if current.strip():
+                out.append(current.strip())
+                current = ""
+            if len(tokenizer.encode(word.strip(), lang=language)) < token_limit:
+                current = word
+                continue
+            # A single unusually long token must still be split rather than
+            # discarded or sent to XTTS beyond its hard assertion.
+            fragment = ""
+            for char in word:
+                candidate = fragment + char
+                if fragment and len(tokenizer.encode(candidate, lang=language)) >= token_limit:
+                    out.append(fragment.strip())
+                    fragment = char
+                else:
+                    fragment = candidate
+            if fragment.strip():
+                current = fragment
+        if current.strip():
+            out.append(current.strip())
     return [c for c in out if any(ch.isalnum() for ch in c)]
 
 
@@ -311,7 +351,11 @@ def _handle_synthesize(msg: dict, stdout) -> None:
 
     language = _xtts_language(msg.get("language"), model.config.languages)
     route = "hi" if language == "ne" and _NE_ROUTE == "hi" else language
-    chunks = _chunks(text, model.tokenizer.char_limits.get(route, 250))
+    # XTTS asserts text_tokens.shape[-1] < gpt_max_text_tokens. Leave one
+    # token of headroom because the tokenizer adds language/special tokens.
+    max_tokens = int(getattr(model.args, "gpt_max_text_tokens", 400))
+    token_limit = max(2, max_tokens - 1)
+    chunks = _chunks(text, model.tokenizer, route, token_limit)
     if not chunks:
         raise ValueError("synthesize: text has nothing speakable")
 
