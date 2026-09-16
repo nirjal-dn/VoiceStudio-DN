@@ -48,3 +48,17 @@ def test_is_available_reports_not_raises_on_so_load_failure(monkeypatch):
     okf, msgf = ab.FasterWhisperBackend.is_available()
     assert okx is False and "failed to load" in msgx and "executable stack" in msgx
     assert okf is False and "failed to load" in msgf and "executable stack" in msgf
+
+
+def test_deep_import_reason_names_native_ctranslate2_execstack():
+    exc = ImportError(
+        "libctranslate2-d3638643.so.4.4.0: cannot enable executable stack as "
+        "shared object requires: Invalid argument"
+    )
+    exc.name = "_ext"
+
+    msg = ab._deep_import_reason(ab.WhisperXBackend, exc)
+
+    assert "cannot enable executable stack" in msg
+    assert "its native CTranslate2 library" in msg
+    assert "its Python dependency '_ext' is missing" not in msg

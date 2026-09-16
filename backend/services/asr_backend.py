@@ -2551,8 +2551,33 @@ _RUNTIME_INSTANCES: weakref.WeakValueDictionary[str, "ASRBackend"] = weakref.Wea
 
 
 def _deep_import_reason(cls: type["ASRBackend"], exc: ImportError) -> str:
-    """User-facing reason for a load-time import failure: names the missing
-    module and the repair command (the ``install_hint`` contract of #1185)."""
+    """User-facing reason for a load-time import failure.
+
+    Native CTranslate2 load errors are not missing Python modules — they are
+    broken/shared-library incompatibilities (e.g. ``libctranslate2...: cannot
+    enable executable stack`` on hardened kernels / newer glibc). Report that
+    accurately so the UI and logs tell the user what actually failed and what
+    to fix.
+    """
+    msg = str(exc)
+    native = (
+        "libctranslate2" in msg.lower()
+        and "cannot enable executable stack" in msg.lower()
+    )
+    if native:
+        libname = "CTranslate2 native library"
+        if "libctranslate2" in msg:
+            libname = msg.split("libctranslate2", 1)[1].split(":", 1)[0] if ":" in msg else "CTranslate2 native library"
+            libname = "libctranslate2" + libname
+        return (
+            f"{cls.display_name} failed to load: its native CTranslate2 library "
+            f"({libname}) is broken or incompatible in this environment "
+            f"({msg}). This is not a missing Python module; it is a native "
+            "dlopen/ELF incompatibility on this host. Reinstall VoiceStudio "
+            "or run `uv sync --reinstall` on a source checkout to repair the "
+            "broken native package."
+        )
+
     missing = getattr(exc, "name", None)
     what = (
         f"its Python dependency {missing!r} is missing"
