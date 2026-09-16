@@ -35,18 +35,19 @@ def test_transcribe_returns_whisper_shape_in_native_script(tmp_path, monkeypatch
     result = ic.IndicConformerBackend().transcribe(_wav(tmp_path))
 
     assert result["language"] == "ne"
-    assert [s["text"] for s in result["segments"]] == ["मेरो अकाउन्टमा अपडेट भएको", "छैन"]
-    assert result["text"] == "मेरो अकाउन्टमा अपडेट भएको छैन"
+    # Each pause-delimited sentence ends with the danda (।, पूर्णविराम).
+    assert [s["text"] for s in result["segments"]] == ["मेरो अकाउन्टमा अपडेट भएको।", "छैन।"]
+    assert result["text"] == "मेरो अकाउन्टमा अपडेट भएको। छैन।"
     words = result["segments"][0]["words"]
     assert [w["word"].strip() for w in words] == ["मेरो", "अकाउन्टमा", "अपडेट", "भएको"]
     assert words[1]["start"] == 0.3 and words[1]["end"] == 1.2
-    assert result["chunks"][1] == {"text": "छैन", "timestamp": (3.5, 3.9)}
+    assert result["chunks"][1] == {"text": "छैन।", "timestamp": (3.5, 3.9)}
 
 
 def test_word_timestamps_can_be_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(ic, "_load", lambda: _StubRuntime([("पोलिसी", 0.0, 0.5, 0.9)]))
     result = ic.IndicConformerBackend().transcribe(_wav(tmp_path), word_timestamps=False)
-    assert result["text"] == "पोलिसी"
+    assert result["text"] == "पोलिसी।"
     assert result["segments"][0]["words"] == []
 
 
@@ -74,6 +75,16 @@ def test_nepali_output_is_strictly_devanagari():
     assert ic.clean_word("छ|", "ne") == "छ।"
     assert ic.clean_word("hello안녕سلامमेरो", "ne") == "मेरो"
     assert ic.clean_word("<unk>سلام", "ur") == "سلام"  # other scripts keep their own
+
+
+def test_sentence_final_danda_is_added_per_segment():
+    # Devanagari: one danda per pause-delimited sentence, none doubled when the
+    # model already emitted a trailing danda (via clean_word's `|` -> `।`).
+    assert ic._terminate("मेरो नाम", "ne") == "मेरो नाम।"
+    assert ic._terminate("मेरो नाम।", "ne") == "मेरो नाम।"
+    assert ic._terminate("", "ne") == ""
+    # Non-Devanagari scripts keep their own punctuation conventions — no danda.
+    assert ic._terminate("سلام", "ur") == "سلام"
 
 
 def test_capture_uses_pinned_engine_that_serves_capture(monkeypatch):

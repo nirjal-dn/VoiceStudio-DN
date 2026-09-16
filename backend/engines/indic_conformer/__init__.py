@@ -9,7 +9,9 @@ drives the graphs directly (greedy CTC, which also yields word timestamps).
 Each recording is transcribed in one pass over the whole file, never in
 chunks. Output is in the language's native script; for Devanagari languages
 (Nepali by default) anything outside the Devanagari block is removed, so a
-stray token can never surface as Latin, Arabic or Hangul text.
+stray token can never surface as Latin, Arabic or Hangul text. The CTC model
+predicts no punctuation, so each pause-delimited segment (a spoken sentence)
+is terminated with the danda ``।`` (पूर्णविराम) for Devanagari languages.
 
 The model is gated on Hugging Face: accept its terms on the model page, then
 provide a token through Settings -> API Keys, ``HF_TOKEN`` (the project ``.env``
@@ -70,6 +72,16 @@ def clean_word(text: str, lang: str) -> str:
     text = text.replace("<unk>", "")
     if lang in _DEVANAGARI_LANGS:
         text = _NOT_DEVANAGARI.sub("", text.replace("|", "।"))
+    return text
+
+
+def _terminate(text: str, lang: str) -> str:
+    """End a Devanagari sentence with the danda ``।`` (पूर्णविराम). The CTC model
+    emits no punctuation, so a pause-delimited segment is the sentence proxy we
+    have. No-op when the text is empty or already ends in a danda the model
+    surfaced mid-utterance (via ``clean_word``'s ``|`` → ``।``)."""
+    if lang in _DEVANAGARI_LANGS and text and not text.endswith("।"):
+        return f"{text}।"
     return text
 
 
@@ -163,7 +175,7 @@ def _load() -> _Runtime:
         return _runtime
 
 
-def _segments(words, word_timestamps: bool) -> list[dict]:
+def _segments(words, word_timestamps: bool, lang: str) -> list[dict]:
     groups: list[list] = []
     for w in words:
         if not groups or w[1] - groups[-1][-1][2] >= _SEGMENT_GAP_S:
@@ -171,7 +183,7 @@ def _segments(words, word_timestamps: bool) -> list[dict]:
         groups[-1].append(w)
     return [
         {
-            "text": " ".join(w[0] for w in group),
+            "text": _terminate(" ".join(w[0] for w in group), lang),
             "start": round(group[0][1], 3),
             "end": round(group[-1][2], 3),
             "words": [
@@ -231,7 +243,7 @@ class IndicConformerBackend(ASRBackend):
             # memory grows with length, so very long files need a bigger box.
             with _infer_lock:
                 words = runtime.words(audio, lang)
-        segments = _segments(words, word_timestamps)
+        segments = _segments(words, word_timestamps, lang)
         return {
             "text": " ".join(s["text"] for s in segments),
             "segments": segments,
