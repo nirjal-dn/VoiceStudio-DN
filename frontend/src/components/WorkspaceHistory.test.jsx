@@ -56,6 +56,24 @@ function renderRail(overrides = {}) {
 }
 
 describe('WorkspaceHistory takes actions', () => {
+  it('shows voice-convert takes in the voice history rail', () => {
+    renderRail({
+      history: [
+        {
+          id: 'convert-1',
+          mode: 'convert',
+          text: 'converted speech',
+          audio_path: 'convert-1.wav',
+          starred: 0,
+          created_at: 3,
+        },
+      ],
+    });
+
+    expect(screen.getByRole('button', { name: 'converted speech' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Convert' })).toBeInTheDocument();
+  });
+
   it('star button reflects the starred state and calls the handler', () => {
     const toggleStarHistory = vi.fn();
     renderRail({ toggleStarHistory });

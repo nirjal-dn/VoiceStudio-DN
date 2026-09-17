@@ -34,6 +34,7 @@ const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'clone', label: 'Clone' },
   { id: 'design', label: 'Design' },
+  { id: 'convert', label: 'Convert' },
   { id: 'starred', label: 'Starred' },
 ];
 
@@ -148,9 +149,12 @@ export default function WorkspaceHistory({
       </button>
     ) : null;
 
-  // Voice workspace = clone + design generations (dub lives in its own workspace).
+  // Voice workspace = clone, design, and voice-convert generations (dub lives
+  // in its own workspace).
   const items = useMemo(() => {
-    const synth = history.filter((h) => h.mode === 'clone' || h.mode === 'design');
+    const synth = history.filter(
+      (h) => h.mode === 'clone' || h.mode === 'design' || h.mode === 'convert',
+    );
     if (filter === 'all') return synth;
     if (filter === 'starred') return synth.filter((h) => !!h.starred);
     return synth.filter((h) => h.mode === filter);
