@@ -484,7 +484,9 @@ def _build_synth(
     ``opts`` (#1208) carries the expressive/quality knobs + cache opt-out. A
     default instance reproduces today's exact synth call and caching.
     """
-    from services.tts_backend import OmniVoiceBackend, active_backend_id, get_backend_class
+    from services.tts_backend import (
+        OmniVoiceBackend, active_backend_id, get_backend_class, get_engine_instance,
+    )
 
     opts = opts or ExpressiveOptions()
     cache: dict = {}
@@ -509,7 +511,9 @@ def _build_synth(
         return {"mode": "omnivoice", "resolve": resolve, "engine_id": engine_id,
                 "get_model": get_model, "language": language, "opts": opts}
 
-    backend = cls()
+    # Shared per-class instance: this runs once per chapter, and a fresh
+    # instance per chapter spawned a new sidecar / reloaded the model each time.
+    backend = get_engine_instance(cls)
     native_proxy = bool(getattr(cls, "supports_native_omnivoice_controls", False))
     extra = (_omnivoice_sampling_kwargs(opts) if native_proxy
              else _generic_extra_kwargs(opts))

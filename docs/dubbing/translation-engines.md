@@ -215,6 +215,14 @@ launching the backend (or in **Settings → Credentials**):
   pro endpoint).
 - **Microsoft Translator:** `MICROSOFT_API_KEY` (optionally `MICROSOFT_BASE_URL`).
 
+### Optional failover (off by default)
+
+Set `OMNIVOICE_TRANSLATE_FALLBACK=1` to retry segments that Google, DeepL,
+Microsoft, or MyMemory could not translate: first with the LLM configured for
+the **dub_translation** skill, then (Google only) with MyMemory. It is off by
+default because it sends those segments to a provider you did not pick. A
+segment that every fallback fails keeps the original provider error.
+
 ## Editing workspace
 
 After transcription, drag the divider between the video/timeline and transcript

@@ -16,12 +16,10 @@ engine does.
 """
 from __future__ import annotations
 
-import math
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 if TYPE_CHECKING:
     import torch  # noqa: F401
@@ -72,13 +70,7 @@ class VoxCPM2SubprocessBackend(SubprocessBackend):
     def recv_timeout_s(self) -> float:
         # A cold load downloads several GB of weights; the sidecar heartbeats
         # progress frames meanwhile, and each one re-arms this deadline.
-        try:
-            v = float(os.environ.get("OMNIVOICE_VOXCPM2_RECV_TIMEOUT_S", "900"))
-        except (TypeError, ValueError):
-            return 900.0
-        if not math.isfinite(v):  # reject inf/nan so the deadline can't be disabled
-            return 900.0
-        return max(30.0, v)
+        return recv_timeout_from_env("OMNIVOICE_VOXCPM2_RECV_TIMEOUT_S", 900.0)
 
     @property
     def sample_rate(self) -> int:

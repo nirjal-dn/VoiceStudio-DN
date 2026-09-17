@@ -98,6 +98,47 @@ describe('Transcriptions capture entry point', () => {
 
     expect(await screen.findByText('The shared capture path works.')).toBeInTheDocument();
   });
+
+  it('shows a transcript written by another window (desktop dictation pill)', async () => {
+    render(<TranscriptionsPage />);
+    act(() => {
+      localStorage.setItem(
+        'omni_transcriptions',
+        JSON.stringify([
+          {
+            id: 7,
+            text: 'From the widget window.',
+            language: 'en',
+            timestamp: new Date().toISOString(),
+          },
+        ]),
+      );
+      window.dispatchEvent(new StorageEvent('storage', { key: 'omni_transcriptions' }));
+    });
+
+    expect(await screen.findByText('From the widget window.')).toBeInTheDocument();
+  });
+
+  it('deleting an entry keeps entries another window added meanwhile', async () => {
+    addTranscription({ text: 'Old entry to delete.', language: 'en' });
+    render(<TranscriptionsPage />);
+
+    // Another window appends without notifying this page.
+    const stored = JSON.parse(localStorage.getItem('omni_transcriptions'));
+    stored.unshift({
+      id: 99,
+      text: 'Newer entry from the pill.',
+      language: 'en',
+      timestamp: new Date().toISOString(),
+    });
+    localStorage.setItem('omni_transcriptions', JSON.stringify(stored));
+
+    fireEvent.click(await screen.findByText('Old entry to delete.'));
+    fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+
+    const after = JSON.parse(localStorage.getItem('omni_transcriptions'));
+    expect(after.map((e) => e.text)).toEqual(['Newer entry from the pill.']);
+  });
 });
 
 // #1798: an OpenAI-compatible ASR answering in json/text format returns no

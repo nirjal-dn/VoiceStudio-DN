@@ -108,6 +108,23 @@ _STDERR_TAIL_CHARS = 800
 RECV_TIMEOUT_S = 60.0
 
 
+def recv_timeout_from_env(name: str, default: float) -> float:
+    """A sidecar's recv deadline from ``name``, never below 30 s.
+
+    Malformed, infinite or NaN values fall back to ``default``: an ``inf``
+    deadline would disable the watchdog that kills a wedged sidecar.
+    """
+    import math
+
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(value):
+        return float(default)
+    return max(30.0, value)
+
+
 # ── Idle sidecar reaping (parity Action 13) ─────────────────────────────────
 #
 # A subprocess engine's sidecar holds a process and, for GPU engines, VRAM —
@@ -671,10 +688,6 @@ class SubprocessBackend(TTSBackend):
             pass
         finally:
             self._proc = None
-
-    def unload(self) -> None:
-        """TTSBackend.unload override — idempotent shutdown."""
-        self.shutdown()
 
     # ── health check + generate ────────────────────────────────────────────
 

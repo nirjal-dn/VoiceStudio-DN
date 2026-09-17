@@ -28,12 +28,11 @@ packages. The parent only ever spawns it as a subprocess.
 from __future__ import annotations
 
 import logging
-import math
 import os
 import re
 from typing import TYPE_CHECKING
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 if TYPE_CHECKING:
     import torch  # noqa: F401
@@ -174,13 +173,7 @@ class IndexTTS2Backend(SubprocessBackend):
         # heartbeats during infer(), which is what actually proves liveness —
         # this deadline is the ceiling for a sidecar that has gone genuinely
         # silent. OMNIVOICE_INDEXTTS_RECV_TIMEOUT_S tunes it.
-        try:
-            v = float(os.environ.get("OMNIVOICE_INDEXTTS_RECV_TIMEOUT_S", "900"))
-        except (ValueError, TypeError):
-            return 900.0
-        if not math.isfinite(v):  # reject inf/nan so the deadline can't be disabled
-            return 900.0
-        return max(30.0, v)
+        return recv_timeout_from_env("OMNIVOICE_INDEXTTS_RECV_TIMEOUT_S", 900.0)
 
     @classmethod
     def sidecar_script(cls):

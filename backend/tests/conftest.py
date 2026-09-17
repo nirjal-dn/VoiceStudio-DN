@@ -39,6 +39,10 @@ if not os.environ.get("OMNIVOICE_ENV_FILE"):
     os.environ["OMNIVOICE_ENV_FILE"] = os.path.join(
         os.environ["OMNIVOICE_DATA_DIR"], "user-env"
     )
+
+# Starlette's TestClient sends ``Host: testserver``; the loopback browser guard
+# (core/loopback_guard.py) only allows hosts that name this machine.
+os.environ.setdefault("OMNIVOICE_ALLOWED_HOSTS", "testserver")
 # TTS checkpoint sentinel — mirrors tests/conftest.py (both assign the same
 # value, so load order doesn't matter). Unconditional on purpose (#1175
 # review): an ambient OMNIVOICE_MODEL from the dev's shell (set for running

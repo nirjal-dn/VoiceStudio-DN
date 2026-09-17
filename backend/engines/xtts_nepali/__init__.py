@@ -23,12 +23,11 @@ or with ``OMNIVOICE_TTS_BACKEND=xtts-nepali``. Sidecar knobs live in main.py.
 from __future__ import annotations
 
 import logging
-import math
 import os
 import sys
 from pathlib import Path
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 logger = logging.getLogger("omnivoice.engines.xtts_nepali")
 
@@ -43,6 +42,9 @@ class XttsNepaliBackend(SubprocessBackend):
     _DEFAULT_SAMPLE_RATE = 24_000
     gpu_compat: tuple[str, ...] = ("cuda", "cpu")
     supports_cloning = True
+    # XTTS conditions on the reference audio alone; no transcript needed.
+    uses_ref_text = False
+    accepts_seed = True
     # Language the UI selects instead of "Auto" while this engine is active.
     default_language = "ne"
 
@@ -80,13 +82,7 @@ class XttsNepaliBackend(SubprocessBackend):
     def recv_timeout_s(self) -> float:
         # The sidecar heartbeats every few seconds through the weight download,
         # the model load and each sentence, so this only bounds a silent wedge.
-        try:
-            v = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_RECV_TIMEOUT_S", "600"))
-        except (ValueError, TypeError):
-            return 600.0
-        if not math.isfinite(v):
-            return 600.0
-        return max(30.0, v)
+        return recv_timeout_from_env("OMNIVOICE_XTTS_NEPALI_RECV_TIMEOUT_S", 600.0)
 
     @property
     def sample_rate(self) -> int:

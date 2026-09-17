@@ -53,6 +53,11 @@ logger = logging.getLogger("omnivoice.asr")
 ASR_TRANSCRIBE_TIMEOUT_S = float(os.environ.get("OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S", "300.0"))
 
 
+class ASRLanguageNotSupportedError(ValueError):
+    """The request names a language the selected ASR engine cannot transcribe.
+    A client error (400): the user picks another language or engine."""
+
+
 class ASRTimeoutError(TimeoutError):
     """Raised when a whole-file transcribe exceeds ASR_TRANSCRIBE_TIMEOUT_S.
 
@@ -362,6 +367,10 @@ class ASRBackend(ABC):
     # Fast enough for live capture/dictation. When the user pins such an engine,
     # get_capture_asr_backend() uses it instead of its automatic picks.
     serves_capture: bool = False
+    # Accepts ``transcribe(..., language=...)``: route the request's language
+    # to the model instead of relying on auto-detection. Callers go through
+    # transcribe_in_language(), which only passes it to engines that opt in.
+    accepts_language: bool = False
 
     def execution_evidence_loaded(self) -> bool:
         """Whether this instance has live model state worth reporting."""
@@ -1811,6 +1820,30 @@ class MoonshineASRBackend(ASRBackend):
 # ── sherpa-onnx live dictation (ONNX, CPU, streaming + offline) ─────────────
 
 
+def _resample_to_16k(data, sr: int):
+    """Band-limited resample to 16 kHz. Linear interpolation folds everything
+    above 8 kHz back into the speech band (aliasing), which costs recognition
+    accuracy on 44.1/48 kHz uploads; torchaudio's windowed-sinc filter removes
+    it. Falls back to linear interpolation if torchaudio cannot load."""
+    import numpy as np
+
+    if len(data) == 0:
+        return data
+    try:
+        import torch
+        import torchaudio.functional as taf
+
+        out = taf.resample(torch.from_numpy(np.ascontiguousarray(data)), int(sr), 16000)
+        return out.numpy().astype(np.float32, copy=False)
+    except Exception:  # noqa: BLE001 — degraded but working decode beats none
+        n = int(round(len(data) * 16000 / sr))
+        if n <= 0:
+            return data[:0]
+        xp = np.linspace(0.0, 1.0, num=len(data), endpoint=False)
+        x = np.linspace(0.0, 1.0, num=n, endpoint=False)
+        return np.interp(x, xp, data).astype(np.float32)
+
+
 def _load_audio_16k_mono_f32(audio_path: str):
     """Decode any audio file to 16 kHz mono float32 in [-1, 1] for sherpa.
 
@@ -1827,12 +1860,7 @@ def _load_audio_16k_mono_f32(audio_path: str):
             data = data.mean(axis=1)
         data = np.ascontiguousarray(data, dtype=np.float32)
         if sr != 16000:
-            # Lightweight linear resample — adequate for ASR features.
-            n = int(round(len(data) * 16000 / sr))
-            if n > 0:
-                xp = np.linspace(0.0, 1.0, num=len(data), endpoint=False)
-                x = np.linspace(0.0, 1.0, num=n, endpoint=False)
-                data = np.interp(x, xp, data).astype(np.float32)
+            data = _resample_to_16k(data, sr)
             sr = 16000
         return data, sr
     except Exception:
@@ -2989,7 +3017,15 @@ def _ref_audio_fingerprint(audio_path: str) -> str | None:
         return None
 
 
-def transcribe_reference(audio_path: str) -> str | None:
+def transcribe_in_language(backend: "ASRBackend", audio_path: str, language=None, **kw) -> dict:
+    """``backend.transcribe`` with the caller's language when the engine takes
+    one (``accepts_language``); engines that auto-detect are called unchanged."""
+    if language and getattr(backend, "accepts_language", False):
+        kw["language"] = language
+    return backend.transcribe(audio_path, **kw)
+
+
+def transcribe_reference(audio_path: str, language=None) -> str | None:
     """Transcribe a voice-clone reference clip with the active ASR backend.
 
     Voice cloning without a user-supplied transcript used to fall through to
@@ -3004,6 +3040,10 @@ def transcribe_reference(audio_path: str) -> str | None:
     Results are cached by audio content (#1032) — see the cache notes above.
     """
     fingerprint = _ref_audio_fingerprint(audio_path)
+    if fingerprint is not None and language:
+        # The same clip transcribed for another language is a different result.
+        from services.languages import iso_code
+        fingerprint = f"{fingerprint}|{iso_code(language) or language}"
     if fingerprint is not None:
         with _ref_transcript_lock:
             cached = _ref_transcript_cache.get(fingerprint)
@@ -3033,7 +3073,7 @@ def transcribe_reference(audio_path: str) -> str | None:
         # model load it lazily rather than constructing a second copy here.
         return None
     try:
-        result = backend.transcribe(audio_path, word_timestamps=False)
+        result = transcribe_in_language(backend, audio_path, language, word_timestamps=False)
     except Exception as e:  # noqa: BLE001 — degrade to the model fallback
         logger.warning(
             "transcribe_reference: %s failed (%s) — deferring to the model's "
@@ -3449,6 +3489,10 @@ def _offline_asr_repo(backend_id: str | None = None) -> str | None:
     is actually about to load, which can differ from ``active_backend_id()``
     when a preloaded ``asr_pipe`` steers selection (Greptile review, #1198)."""
     bid = backend_id or active_backend_id()
+    # Engines that declare their weights (model_repo_id) preflight on them.
+    declared = _REGISTRY[bid] if bid in _REGISTRY else None
+    if declared is not None and getattr(declared, "model_repo_id", None):
+        return declared.model_repo_id
     if bid == "whisperx":
         return _fw_repo(os.environ.get("ASR_MODEL_WHISPERX", "large-v3"))
     if bid == "faster-whisper":
@@ -3480,6 +3524,17 @@ def _offline_asr_repo(backend_id: str | None = None) -> str | None:
     if bid == "pytorch-whisper":
         return os.environ.get("OMNIVOICE_PYTORCH_ASR_MODEL", _PYTORCH_ASR_DEFAULT)
     return None
+
+
+def _pinned_capture_repo() -> str | None:
+    """Declared weights of the user-pinned ASR engine when it serves capture."""
+    if not _asr_backend_pinned():
+        return None
+    bid = active_backend_id()
+    cls = _REGISTRY[bid] if bid in _REGISTRY else None
+    if cls is None or not getattr(cls, "serves_capture", False):
+        return None
+    return getattr(cls, "model_repo_id", None)
 
 
 def _capture_whisper_repo() -> str | None:
@@ -3620,7 +3675,13 @@ def asr_model_missing_error(*, purpose: str = "transcribe",
     try:
         prefer_sherpa_recommendation = not skip_sherpa
         excluded_sherpa_model_id = None
-        if purpose == "dictation":
+        pinned_capture = _pinned_capture_repo() if purpose == "dictation" else None
+        if pinned_capture:
+            # A pinned engine that serves capture (IndicConformer) is what
+            # dictation will run (get_capture_asr_backend) — check its weights,
+            # not the sherpa/Whisper fallback chain it replaces.
+            repo = pinned_capture
+        elif purpose == "dictation":
             sid = None if skip_sherpa else (sherpa_model_id or dictation_model_id())
             if sid:
                 ok, _ = SherpaDictationBackend.is_available()
@@ -3646,6 +3707,8 @@ def asr_model_missing_error(*, purpose: str = "transcribe",
             repo = _capture_whisper_repo()
         else:
             repo = _offline_asr_repo(backend_id)
+        # The pinned capture engine's own weights are what the CTA must offer.
+        rec_purpose = "transcribe" if pinned_capture else purpose
         if repo is None:
             if require_installed:
                 return {
@@ -3662,7 +3725,7 @@ def asr_model_missing_error(*, purpose: str = "transcribe",
                 "error": ASR_MODEL_MISSING,
                 "missing_repo_id": repo,
                 "recommended": _recommended_asr_model(
-                    purpose, repo,
+                    rec_purpose, repo,
                     prefer_sherpa=prefer_sherpa_recommendation,
                     excluded_sherpa_model_id=excluded_sherpa_model_id,
                 ),
@@ -3675,7 +3738,7 @@ def asr_model_missing_error(*, purpose: str = "transcribe",
             "error": ASR_MODEL_MISSING,
             "missing_repo_id": repo,
             "recommended": _recommended_asr_model(
-                purpose, repo,
+                rec_purpose, repo,
                 prefer_sherpa=prefer_sherpa_recommendation,
                 excluded_sherpa_model_id=excluded_sherpa_model_id,
             ),

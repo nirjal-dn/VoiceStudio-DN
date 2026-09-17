@@ -934,6 +934,11 @@ def _run_backend_inference(
     narrower protocol unchanged.
     """
     import torch
+    from services.tts_backend import engine_in_use
+    # Marks the engine busy so a concurrent engine switch cannot evict it
+    # mid-render (services/engine_memory._engine_busy).
+    _in_use = engine_in_use(backend)
+    _in_use.__enter__()
     try:
         if used_seed is not None:
             torch.manual_seed(used_seed)
@@ -949,6 +954,8 @@ def _run_backend_inference(
         native_proxy = bool(
             getattr(backend, "supports_native_omnivoice_controls", False)
         )
+        # Sidecars that seed their own RNG get the per-call seed too.
+        passes_seed = native_proxy or bool(getattr(backend, "accepts_seed", False))
         if native_proxy:
             gen_kwargs.update({
                 key: value for key, value in {
@@ -974,7 +981,7 @@ def _run_backend_inference(
                 # Per-span duration is left to the engine; an explicit overall
                 # `duration` can't be meaningfully split across spans.
                 span_kwargs = dict(gen_kwargs)
-                if native_proxy and first_span and used_seed is not None:
+                if passes_seed and first_span and used_seed is not None:
                     span_kwargs["seed"] = used_seed
                 first_span = False
                 return backend.generate(span_text, duration=None, **span_kwargs)
@@ -995,7 +1002,7 @@ def _run_backend_inference(
                     if used_seed is not None:
                         torch.manual_seed(used_seed + i)
                     chunk_kwargs = dict(gen_kwargs)
-                    if native_proxy and used_seed is not None:
+                    if passes_seed and used_seed is not None:
                         chunk_kwargs["seed"] = used_seed + i
                     parts.append(backend.generate(
                         chunk_text, duration=None, **chunk_kwargs
@@ -1005,7 +1012,7 @@ def _run_backend_inference(
                                                      texts=text_chunks,
                                                      sink=dropped_sink)
             else:
-                if native_proxy and used_seed is not None:
+                if passes_seed and used_seed is not None:
                     gen_kwargs["seed"] = used_seed
                 audio_out = backend.generate(text, duration=duration, **gen_kwargs)
 
@@ -1022,6 +1029,8 @@ def _run_backend_inference(
         if rewritten is not e:
             raise rewritten from e
         _oom_friendly_reraise(e)
+    finally:
+        _in_use.__exit__(None, None, None)
 
 
 # #1257: the language picker offers all 646 languages regardless of engine,
@@ -1074,6 +1083,67 @@ def _language_rejection_or(e: BaseException, backend, language):
         f"Model Catalogue (the VoiceStudio engine has the widest coverage) "
         f"and generate again. Engine's own message: {e}"
     )
+
+
+def _saved_take_bytes(audio_filename, audio_tensor, sample_rate) -> bytes:
+    """The response body for a finished take: the WAV _finalize_generation just
+    wrote (byte-identical to re-encoding the tensor, at a fraction of the cost),
+    or a fresh encode when the file is gone (e.g. pruned by retention)."""
+    try:
+        with open(os.path.join(OUTPUTS_DIR, audio_filename), "rb") as fh:
+            return fh.read()
+    except OSError:
+        buffer = io.BytesIO()
+        _safe_torchaudio_save(buffer, audio_tensor, sample_rate, format="wav")
+        return buffer.getvalue()
+
+
+async def _auto_reference_transcript(
+    ref_audio_path, ref_lease, *, language, persist_profile_id, execution_device,
+):
+    """Transcript for a reference clip that came without one, or None.
+
+    #308: transcribed with the active ASR backend (whisperx / faster-whisper /
+    mlx-whisper / IndicConformer in the request's language) instead of the
+    model's built-in transformers pipeline, which cannot load
+    whisper-large-v3-turbo on transformers 5.3. Best-effort: a failure or hang
+    returns None and the model's own fallback applies.
+
+    #1032: the first transcript is cached onto its clone profile (only an empty
+    column is ever filled) — but only when it is written in the voice language's
+    script, so an English/romanized mis-hearing of a Nepali clip is used once
+    and never poisons every later clone from that profile.
+    """
+    from services.asr_backend import transcribe_reference
+    from services.languages import text_matches_language
+
+    # Same #730 hang risk as any whisperx transcribe — bound + reset the pool so
+    # a wedged reference transcribe can't brick the backend.
+    try:
+        ref_text = await _run_with_reference_lease(
+            ref_lease,
+            lambda release: run_on_gpu_pool_guarded(
+                functools.partial(transcribe_reference, ref_audio_path, language=language),
+                what="Reference transcribe",
+                # Floor budget (#1190): a reference clip is seconds of audio, so
+                # the length-scaled bonus never applies — explicit all the same.
+                timeout=_generate_timeout_s("", execution_device=execution_device),
+                on_abandon=release,
+            ),
+        )
+    # TimeoutError covers both the execution bound and pool saturation.
+    except TimeoutError as e:
+        logger.warning("reference transcribe hung (%s); using model ASR fallback", e)
+        return None
+    if ref_text and persist_profile_id:
+        if text_matches_language(ref_text, language):
+            _persist_profile_ref_text(persist_profile_id, ref_text)
+        else:
+            logger.warning(
+                "not caching reference transcript for profile %s: it does not "
+                "look like %s", log_safe(persist_profile_id), log_safe(language),
+            )
+    return ref_text
 
 
 def _persist_profile_ref_text(profile_id: str, ref_text: str) -> None:
@@ -1144,7 +1214,9 @@ async def _finalize_generation(
     audio_id = str(uuid.uuid4())[:8]
     audio_filename = f"{audio_id}.wav"
     audio_path = os.path.join(OUTPUTS_DIR, audio_filename)
-    _safe_torchaudio_save(audio_path, audio_tensor, sample_rate)
+    # Encoding a long take is CPU + disk work (~15 ms per audio minute
+    # measured); keep it off the event loop.
+    await asyncio.to_thread(_safe_torchaudio_save, audio_path, audio_tensor, sample_rate)
 
     audio_dur = round(audio_tensor.shape[-1] / sample_rate, 2)
 
@@ -1405,6 +1477,10 @@ async def generate_speech(
     # (utils/duration.py) so the estimate and the synthesis see the same text.
     import unicodedata
     text = unicodedata.normalize("NFC", text)
+    # Whitespace-only text has nothing to say: fail before resolving an engine
+    # or queueing a GPU job (the remote worker path already rejects it).
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text is empty. Enter something to say.")
 
     # ── Engine resolution (issue #312) ──────────────────────────────────────
     # The request runs on the engine selected in Settings (POST /engines/select,
@@ -1594,8 +1670,10 @@ async def generate_speech(
                 persist_ref_text_profile_id = profile_id
     elif ref_audio is not None:
         try:
+            from core.uploads import copy_upload
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-                f.write(await ref_audio.read())
+                await copy_upload(ref_audio, f)
                 ref_audio_path = f.name
                 cleanup_ref = True
                 ref_lease = _TempReferenceLease(ref_audio_path)
@@ -1603,42 +1681,14 @@ async def generate_speech(
             raise HTTPException(status_code=500, detail=str(e))
 
     # #308: a transcript-less reference is transcribed with the active ASR
-    # backend (whisperx / faster-whisper / mlx-whisper) instead of the model's
-    # built-in transformers pipeline, which cannot load whisper-large-v3-turbo
-    # on transformers 5.3. On failure ref_text stays None and the model's
-    # fallback behaves exactly as before.
-    if ref_audio_path and not ref_text:
-        from services.asr_backend import transcribe_reference
-        # Same #730 hang risk as any whisperx transcribe — bound + reset the pool
-        # so a wedged reference transcribe can't brick the backend. This path is
-        # best-effort (transcribe_reference returns None on failure → the model's
-        # built-in ASR fallback), so a timeout degrades to None rather than
-        # failing the whole generate.
-        try:
-            ref_text = await _run_with_reference_lease(
-                ref_lease,
-                lambda release: run_on_gpu_pool_guarded(
-                    functools.partial(transcribe_reference, ref_audio_path),
-                    what="Reference transcribe",
-                    # Floor budget (#1190): a reference clip is seconds of audio,
-                    # so the length-scaled bonus never applies — but the timeout is
-                    # explicit here too, so no dispatch relies on a hidden default.
-                    timeout=_generate_timeout_s(
-                        "", execution_device=_routing["effective_device"]
-                    ),
-                    on_abandon=release,
-                )
-            )
-        # TimeoutError covers both the execution bound and pool saturation:
-        # this path is best-effort either way.
-        except TimeoutError as e:
-            logger.warning("reference transcribe hung (%s); using model ASR fallback", e)
-            ref_text = None
-        # #1032: cache the transcript onto its clone profile so the ASR model
-        # load + transcribe above happens once per profile, not per generate.
-        # Only fills an empty column — a user-entered transcript always wins.
-        if ref_text and persist_ref_text_profile_id:
-            _persist_profile_ref_text(persist_ref_text_profile_id, ref_text)
+    # backend; engines that clone from audio alone (uses_ref_text False — XTTS)
+    # never read it, so they skip the ASR pass entirely.
+    if ref_audio_path and not ref_text and getattr(backend_cls, "uses_ref_text", True):
+        ref_text = await _auto_reference_transcript(
+            ref_audio_path, ref_lease, language=language,
+            persist_profile_id=persist_ref_text_profile_id,
+            execution_device=_routing["effective_device"],
+        )
 
     # #526: materialize a concrete seed when none was supplied (and no profile
     # pinned one) so the take is reproducible and we can hand it back via the
@@ -1948,24 +1998,31 @@ async def generate_speech(
                     torch.manual_seed(used_seed + i)
                 if _backend is not None:
                     _lang = None if (language and language.lower() == "auto") else language
-                    raw = _backend.generate(
-                        chunk_text, duration=None, language=_lang,
-                        ref_audio=ref_audio_path, ref_text=ref_text,
-                        instruct=instruct, num_step=num_step,
-                        guidance_scale=guidance_scale, speed=speed,
-                        denoise=denoise, postprocess_output=postprocess_output,
-                        **({
-                            key: value for key, value in {
-                                "t_shift": t_shift,
-                                "layer_penalty_factor": layer_penalty_factor,
-                                "position_temperature": position_temperature,
-                                "class_temperature": class_temperature,
-                                "seed": used_seed + i if used_seed is not None else None,
-                            }.items() if value is not None
-                        } if getattr(
-                            _backend, "supports_native_omnivoice_controls", False
-                        ) else {}),
+                    from services.tts_backend import engine_in_use
+                    _native = getattr(_backend, "supports_native_omnivoice_controls", False)
+                    _seed_kw = (
+                        {"seed": used_seed + i}
+                        if used_seed is not None and not _native
+                        and getattr(_backend, "accepts_seed", False) else {}
                     )
+                    with engine_in_use(_backend):
+                        raw = _backend.generate(
+                            chunk_text, duration=None, language=_lang,
+                            ref_audio=ref_audio_path, ref_text=ref_text,
+                            instruct=instruct, num_step=num_step,
+                            guidance_scale=guidance_scale, speed=speed,
+                            denoise=denoise, postprocess_output=postprocess_output,
+                            **({
+                                key: value for key, value in {
+                                    "t_shift": t_shift,
+                                    "layer_penalty_factor": layer_penalty_factor,
+                                    "position_temperature": position_temperature,
+                                    "class_temperature": class_temperature,
+                                    "seed": used_seed + i if used_seed is not None else None,
+                                }.items() if value is not None
+                            } if _native else {}),
+                            **_seed_kw,
+                        )
                     sr = _backend.sample_rate
                     skip = getattr(_backend, "applies_own_mastering", False)
                 else:
@@ -2312,10 +2369,9 @@ async def generate_speech(
         audio_dur = _meta["duration"]
         gen_time = _meta["gen_time"]
 
-        buffer = io.BytesIO()
-        _safe_torchaudio_save(buffer, audio_tensor, sample_rate, format="wav")
-        buffer.seek(0)
-        wav_bytes = buffer.read()
+        wav_bytes = await asyncio.to_thread(
+            _saved_take_bytes, audio_filename, audio_tensor, sample_rate,
+        )
 
         async def _stream_wav():
             chunk_size = 16384

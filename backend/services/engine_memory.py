@@ -18,6 +18,7 @@ switch — ~8 s for the VoiceStudio core, ~1–2 s for the lighter engines).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from core.logging_utils import log_safe
 import os
@@ -49,6 +50,12 @@ def _evict_instance_cache(keep_cls) -> list[str]:
     for cls, inst in list(_ENGINE_INSTANCES.items()):
         if cls is keep_cls:
             continue
+        if _engine_busy(cls, inst):
+            # Unloading mid-job kills a generating sidecar or frees weights a
+            # running render still uses; the idle sweep/reaper frees it later.
+            logger.info("evict: %s is mid-job; leaving it resident",
+                        getattr(cls, "id", cls.__name__))
+            continue
         try:
             inst.unload()
         except Exception:  # noqa: BLE001
@@ -57,6 +64,21 @@ def _evict_instance_cache(keep_cls) -> list[str]:
         _ENGINE_INSTANCES.pop(cls, None)
         evicted.append(getattr(cls, "id", cls.__name__))
     return evicted
+
+
+def _engine_busy(cls, inst) -> bool:
+    """True while a job holds the engine: an ``engine_in_use`` scope, or a
+    sidecar whose operation lock is taken (a synth/ping in flight)."""
+    try:
+        from services.tts_backend import _ENGINE_IN_USE
+
+        if _ENGINE_IN_USE.get(cls):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    lock = getattr(inst, "_lock", None)
+    locked = getattr(lock, "locked", None)
+    return bool(locked()) if callable(locked) else False
 
 
 async def evict_other_tts_engines(keep_id: str) -> list[str]:
@@ -91,7 +113,9 @@ async def evict_other_tts_engines(keep_id: str) -> list[str]:
         keep_cls = get_backend_class(keep_id)
     except Exception:  # noqa: BLE001 — unknown id → evict all cached instances
         keep_cls = None
-    evicted.extend(_evict_instance_cache(keep_cls))
+    # unload() can wait seconds on a sidecar exit or a gc/empty_cache pass;
+    # keep that off the event loop.
+    evicted.extend(await asyncio.to_thread(_evict_instance_cache, keep_cls))
 
     if evicted:
         logger.info("single-engine eviction: freed %s (keeping %s)", log_safe(evicted), log_safe(keep_id))

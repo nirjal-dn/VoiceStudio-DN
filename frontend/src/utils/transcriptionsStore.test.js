@@ -1,5 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { loadTranscriptions, TRANSCRIPTIONS_KEY, TRANSCRIPTION_EVENT } from './transcriptionsStore';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  loadTranscriptions,
+  notifyTranscriptionAdded,
+  subscribeTranscriptions,
+  TRANSCRIPTIONS_KEY,
+  TRANSCRIPTION_EVENT,
+} from './transcriptionsStore';
 
 describe('transcriptionsStore', () => {
   beforeEach(() => localStorage.clear());
@@ -33,5 +39,26 @@ describe('transcriptionsStore', () => {
     expect(() => loadTranscriptions()).not.toThrow();
     expect(loadTranscriptions()).toEqual([]);
     Object.defineProperty(window, 'localStorage', orig);
+  });
+
+  it('notifies subscribers for same-window adds and other-window storage writes', () => {
+    const callback = vi.fn();
+    const unsubscribe = subscribeTranscriptions(callback);
+
+    notifyTranscriptionAdded({ id: 1, text: 'नमस्ते' });
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    // The desktop pill's widget window writes the shared store.
+    window.dispatchEvent(new StorageEvent('storage', { key: TRANSCRIPTIONS_KEY }));
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    // Unrelated keys are ignored.
+    window.dispatchEvent(new StorageEvent('storage', { key: 'something_else' }));
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    notifyTranscriptionAdded({ id: 2, text: 'x' });
+    window.dispatchEvent(new StorageEvent('storage', { key: TRANSCRIPTIONS_KEY }));
+    expect(callback).toHaveBeenCalledTimes(2);
   });
 });

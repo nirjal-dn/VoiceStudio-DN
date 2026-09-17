@@ -32,8 +32,9 @@ import { requestDictationCapture } from '../utils/dictationCapture';
 import { useDictationLive } from '../hooks/useDictationLive';
 import {
   loadTranscriptions,
+  notifyTranscriptionAdded,
+  subscribeTranscriptions,
   TRANSCRIPTIONS_KEY,
-  TRANSCRIPTION_EVENT,
 } from '../utils/transcriptionsStore';
 
 function saveTranscriptions(list) {
@@ -71,8 +72,8 @@ export function addTranscription(entry) {
   // Keep last 200
   if (list.length > 200) list.length = 200;
   saveTranscriptions(list);
-  // Fire custom event for reactive updates
-  window.dispatchEvent(new CustomEvent(TRANSCRIPTION_EVENT, { detail: newEntry }));
+  // Reactive updates, including the main window when the desktop pill wrote it
+  notifyTranscriptionAdded(newEntry);
 }
 
 function formatLiveClock(seconds = 0) {
@@ -117,14 +118,9 @@ export default function TranscriptionsPage() {
     }
   }, [t, captureDisabled, checkReadiness]);
 
-  // Listen for new transcriptions added from CaptureButton
-  useEffect(() => {
-    const handler = () => {
-      setTranscriptions(loadTranscriptions());
-    };
-    window.addEventListener(TRANSCRIPTION_EVENT, handler);
-    return () => window.removeEventListener(TRANSCRIPTION_EVENT, handler);
-  }, []);
+  // Listen for new transcriptions, including ones the desktop pill's own
+  // window adds.
+  useEffect(() => subscribeTranscriptions(() => setTranscriptions(loadTranscriptions())), []);
 
   const filtered = useMemo(() => {
     if (!normalizedSearch) return transcriptions;
@@ -154,12 +150,14 @@ export default function TranscriptionsPage() {
 
   const deleteEntry = useCallback(
     (id) => {
-      const next = transcriptions.filter((t) => t.id !== id);
+      // Filter the stored list, not this view's copy: another window may have
+      // added entries this page has not re-read yet.
+      const next = loadTranscriptions().filter((t) => t.id !== id);
       setTranscriptions(next);
       saveTranscriptions(next);
       if (selectedId === id) setSelectedId(null);
     },
-    [transcriptions, selectedId],
+    [selectedId],
   );
 
   const clearAll = useCallback(() => {

@@ -62,6 +62,10 @@ tts_engines:
   - id: pockettts
   - id: audiocpp
     doc: docs/engines/audio-cpp.md
+  - id: xtts-nepali
+    doc: docs/engines/xtts-nepali.md
+  - id: indic-parler-tts
+    doc: docs/engines/indic-parler-tts.md
 
 # Same contract against backend/services/asr_backend.py _REGISTRY.
 asr_engines:

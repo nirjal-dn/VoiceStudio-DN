@@ -342,6 +342,28 @@ validation removes only that trusted, configured prefix; it never accepts an
 arbitrary path merely because it ends in `/ws/events`, `/ws/transcribe` or
 `/ws/tts`.
 
+## Browser pages on this machine (loopback guard)
+
+A loopback caller needs no credential, and a web page open in your browser is a
+loopback caller too. So every loopback request also passes a browser guard
+(`backend/core/loopback_guard.py`):
+
+- **Host allow-list.** The `Host` header must name this machine: `localhost`,
+  `127.0.0.1`, `[::1]`, `tauri.localhost`, a host from
+  `OMNIVOICE_ALLOWED_ORIGINS`, or any `*.ts.net` Tailscale name. This blocks DNS
+  rebinding (a site whose domain re-resolves to `127.0.0.1`). A local reverse
+  proxy that forwards another hostname must list it:
+  `OMNIVOICE_ALLOWED_HOSTS="studio.lan,*.home.arpa"`.
+- **Origin check** on state-changing requests (anything but GET/HEAD/OPTIONS)
+  and on WebSocket handshakes: an `Origin` header must be an allowed origin or
+  the backend's own origin, and `Sec-Fetch-Site: cross-site` is rejected. CLI,
+  MCP and SDK clients send neither header and are unaffected.
+
+A rejected request gets `403` (`{"detail": "host not allowed"}` or
+`{"detail": "browser origin rejected"}`); a WebSocket is closed with code
+**1008**. Remote (non-loopback) clients are governed by the PIN / API-key gates
+above instead.
+
 ## Status codes
 
 | Code | Meaning | What to do |

@@ -46,10 +46,20 @@ async def _resolve_stream_backend(engine_id: str | None):
         active_backend_id,
         get_active_tts_backend,
         get_backend_class,
+        get_engine_instance_for,
     )
 
     if engine_id:
-        return get_backend_class(engine_id)()
+        cls = get_backend_class(engine_id)
+        if cls is OmniVoiceBackend:
+            return OmniVoiceBackend()  # per-call view over the shared model
+        # Same seams as /generate and /v1/audio/speech: free other resident
+        # engines, then reuse the per-class instance. A fresh cls() per
+        # message spawned a sidecar / loaded a model copy every utterance.
+        from services.engine_memory import evict_other_tts_engines
+
+        await evict_other_tts_engines(cls.id)
+        return get_engine_instance_for(engine_id)
 
     cls = get_backend_class(active_backend_id())
     if cls is OmniVoiceBackend:

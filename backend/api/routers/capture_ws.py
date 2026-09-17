@@ -309,7 +309,10 @@ async def ws_transcribe(websocket: WebSocket):
     # preflight on the same selection execution will use.
     from services.asr_backend import asr_model_missing_detail, asr_model_missing_error
     _requested_model = websocket.query_params.get("model")
-    missing = None if whole_recording else await asyncio.to_thread(
+    # A whole-recording engine is preflighted on its own weights (the pinned
+    # capture engine's model_repo_id), so a first dictation never starts a
+    # multi-GB download nobody approved.
+    missing = await asyncio.to_thread(
         asr_model_missing_error, purpose="dictation",
         sherpa_model_id=(
             spec.id if spec is not None else _requested_model
@@ -1156,10 +1159,20 @@ def _result_text(result: dict | None) -> str:
     return ""
 
 
+async def _buffer_to_wav(chunks: list[bytes], pcm_sr: int | None) -> str | None:
+    """The session buffer as a temp WAV, built off the event loop: the WebM
+    path runs ffmpeg over the whole recording (every ~2 s for partials) and the
+    PCM path writes it to disk — either would freeze every other request."""
+    chunks = list(chunks)  # the receiver keeps appending to the live list
+    if pcm_sr:
+        return await asyncio.to_thread(lambda: _pcm16_to_wav(b"".join(chunks), pcm_sr))
+    return await asyncio.to_thread(_chunks_to_wav, chunks)
+
+
 async def _transcribe_buffer(chunks: list[bytes], *, pcm_sr: int | None = None) -> str:
     """Quick partial transcription of the current audio buffer."""
 
-    tmp = _pcm16_to_wav(b"".join(chunks), pcm_sr) if pcm_sr else _chunks_to_wav(chunks)
+    tmp = await _buffer_to_wav(chunks, pcm_sr)
     if tmp is None:
         return ""
 
@@ -1188,7 +1201,7 @@ async def _transcribe_buffer_full(
     chunks: list[bytes], *, pcm_sr: int | None = None, skip_sherpa: bool = False,
 ) -> dict:
     """Full transcription with timing info for the final result."""
-    tmp = _pcm16_to_wav(b"".join(chunks), pcm_sr) if pcm_sr else _chunks_to_wav(chunks)
+    tmp = await _buffer_to_wav(chunks, pcm_sr)
     if tmp is None:
         return {"text": "", "segments": [], "language": "unknown",
                 "duration_s": 0, "transcription_time_s": 0, "engine": "none"}

@@ -125,12 +125,9 @@ except ImportError:
 # there (native_preload strictly precedes ml_imports).
 
 # Route HF/Torch caches to a single external directory when requested.
-_cache_dir = os.environ.get("OMNIVOICE_CACHE_DIR")
-if _cache_dir:
-    os.makedirs(_cache_dir, exist_ok=True)
-    os.environ["HF_HOME"] = _cache_dir
-    os.environ["HF_HUB_CACHE"] = _cache_dir
-    os.environ["TORCH_HOME"] = _cache_dir
+from core.config import apply_cache_dir_env as _apply_cache_dir_env  # noqa: E402
+
+_apply_cache_dir_env()
 
 # ── Windows symlink fix ─────────────────────────────────────────────────────
 # HuggingFace Hub creates NTFS symlinks in its cache to deduplicate blobs
@@ -1717,6 +1714,14 @@ app.add_middleware(NetworkAccessMiddleware)
 # carried its own loopback guard; remote mode is exactly the case where a
 # keyed non-loopback client must reach them.
 app.add_middleware(BearerKeyMiddleware)
+
+# Loopback is trusted by socket address, and a web page in the user's browser
+# is loopback too: reject rebound Host headers and cross-site browser writes /
+# WebSocket handshakes before they reach a route. Inside CORS so preflights
+# (OPTIONS, a safe method) still get CORS headers. See core/loopback_guard.py.
+from core.loopback_guard import LoopbackBrowserGuardMiddleware  # noqa: E402
+
+app.add_middleware(LoopbackBrowserGuardMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

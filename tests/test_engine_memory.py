@@ -228,3 +228,77 @@ async def test_a_failing_unload_does_not_abort_the_eviction(instance_cache, monk
     assert set(evicted) == {"a", "b"}
     assert b.unloaded == 1
     assert not instance_cache  # both dropped despite the failure
+
+
+# ── Busy engines are never evicted mid-job (a switch must not kill a render) ──
+
+
+@pytest.mark.asyncio
+async def test_sidecar_holding_its_op_lock_is_not_evicted(instance_cache, monkeypatch):
+    import threading
+
+    class KittenTTSBackend:
+        id = "kittentts"
+
+    class MLXAudioBackend:
+        id = "mlx-audio"
+
+    busy = KittenTTSBackend()
+    busy._lock = threading.Lock()
+    busy.unloaded = 0
+    busy.unload = lambda: setattr(busy, "unloaded", busy.unloaded + 1)
+    instance_cache[KittenTTSBackend] = busy
+    monkeypatch.setattr(
+        "services.tts_backend.get_backend_class",
+        lambda i: MLXAudioBackend if i == "mlx-audio" else KittenTTSBackend,
+    )
+
+    with busy._lock:  # a synth is in flight
+        evicted = await _evict("mlx-audio")
+
+    assert evicted == []
+    assert busy.unloaded == 0
+    assert instance_cache[KittenTTSBackend] is busy
+
+
+@pytest.mark.asyncio
+async def test_engine_in_use_scope_is_not_evicted(instance_cache, monkeypatch):
+    from services.tts_backend import engine_in_use
+
+    class KittenTTSBackend:
+        id = "kittentts"
+
+    class MLXAudioBackend:
+        id = "mlx-audio"
+
+    held = KittenTTSBackend()
+    held.unloaded = 0
+    held.unload = lambda: setattr(held, "unloaded", held.unloaded + 1)
+    instance_cache[KittenTTSBackend] = held
+    monkeypatch.setattr(
+        "services.tts_backend.get_backend_class",
+        lambda i: MLXAudioBackend if i == "mlx-audio" else KittenTTSBackend,
+    )
+
+    with engine_in_use(held):
+        assert await _evict("mlx-audio") == []
+    assert held.unloaded == 0
+
+    assert await _evict("mlx-audio") == ["kittentts"]  # idle again → freed
+    assert held.unloaded == 1
+
+
+def test_subprocess_backend_unload_is_the_busy_guarded_one():
+    """A second `def unload` in the class body silently replaced the
+    busy-guarded force-reap with an unconditional shutdown that wrote a
+    shutdown frame into a sidecar mid-synth."""
+    import ast
+    from pathlib import Path
+
+    import services.subprocess_backend as sb
+
+    tree = ast.parse(Path(sb.__file__).read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SubprocessBackend")
+    unloads = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "unload"]
+    assert len(unloads) == 1
+    assert "unload_sidecar" in sb.SubprocessBackend.unload.__code__.co_names

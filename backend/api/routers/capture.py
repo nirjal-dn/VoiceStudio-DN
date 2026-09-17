@@ -57,7 +57,8 @@ async def transcribe_audio(
 
     Args:
         audio: The audio file to transcribe.
-        language: Optional language hint (not currently used; auto-detected).
+        language: Optional language hint. Engines that take one (e.g.
+            IndicConformer) transcribe in it; auto-detecting engines ignore it.
         model: Whisper model size (legacy; ignored in dual-mode architecture).
         mode: 'fast' (default) uses MLX Turbo for speed; 'accurate' uses
               WhisperX with forced alignment for word-level timing.
@@ -87,8 +88,8 @@ async def transcribe_audio(
     ext = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
     try:
-        content = await audio.read()
-        tmp.write(content)
+        from core.uploads import copy_upload
+        await copy_upload(audio, tmp)  # long recordings: bounded memory
         tmp.close()
 
         use_accurate = (mode or "").strip().lower() == "accurate"
@@ -115,20 +116,21 @@ async def transcribe_audio(
                 # engine whose shallow probe passed but whose deep import
                 # chain is broken, which then 500s at `.transcribe()`. The
                 # loader degrades to the next healthy engine (#1185).
-                from services.asr_backend import load_active_asr_backend
+                from services.asr_backend import load_active_asr_backend, transcribe_in_language
                 backend = load_active_asr_backend()
-                result = backend.transcribe(tmp.name, word_timestamps=True)
+                result = transcribe_in_language(backend, tmp.name, language, word_timestamps=True)
             else:
                 # Fast mode (default): use the fastest available engine
                 # (MLX Turbo on Apple Silicon). Skip word_timestamps for
                 # ~30% latency reduction — dictation doesn't need them.
-                from services.asr_backend import get_capture_asr_backend
+                from services.asr_backend import get_capture_asr_backend, transcribe_in_language
                 backend = get_capture_asr_backend()
-                result = backend.transcribe(tmp.name, word_timestamps=False)
+                result = transcribe_in_language(backend, tmp.name, language, word_timestamps=False)
             return result, backend.id
 
         from services.model_manager import _gpu_pool
         from services.asr_backend import (
+            ASRLanguageNotSupportedError,
             ASRModelMissingError,
             ASRTimeoutError,
             run_transcribe_guarded,
@@ -143,6 +145,8 @@ async def transcribe_audio(
             # silent hang the UI reads as "can't reach the local backend".
             logger.warning("Capture transcription timed out: %s", e)
             raise HTTPException(status_code=504, detail=str(e))
+        except ASRLanguageNotSupportedError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except ASRModelMissingError as e:
             # Degraded past the broken engine onto one with no weights on
             # disk — same typed 409 (+ download CTA) as the preflight above,

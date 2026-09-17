@@ -265,7 +265,11 @@ def test_exchange_limiter_rejects_nonpositive_bounds(invalid_bound):
         _ExchangeAttemptLimiter(limit=invalid_bound)
 
 
-def test_loopback_still_requires_master_to_issue_session():
+def test_loopback_still_requires_master_to_issue_session(monkeypatch):
+    # A loopback request naming another host is stopped earlier by the
+    # loopback browser guard (403); allow this suite's host so the auth rule
+    # itself is what is tested.
+    monkeypatch.setenv("OMNIVOICE_ALLOWED_HOSTS", "testserver,voice.test")
     response = _client(loopback=True).post(
         "/api/auth/session",
         json={"transport": "cookie"},

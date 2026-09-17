@@ -20,6 +20,8 @@ import traceback
 
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 REPO_ID = "ai4bharat/indic-parler-tts"
+#: Reviewed immutable revision; kept equal to services/hf_revisions.py (tested).
+REVISION = "7b527af5ee8ed1f9a28d80b19703ed9bb8ba10ca"
 DEFAULT_DESCRIPTION = os.environ.get(
     "OMNIVOICE_INDIC_PARLER_DESCRIPTION",
     "Amrita speaks with a clear voice at a moderate pace. "
@@ -93,8 +95,8 @@ def _load(stdout):
             device = os.environ.get("OMNIVOICE_INDIC_PARLER_DEVICE") or (
                 "cuda" if torch.cuda.is_available() else "cpu"
             )
-            model = ParlerTTSForConditionalGeneration.from_pretrained(REPO_ID).to(device)
-            tokenizer = AutoTokenizer.from_pretrained(REPO_ID)
+            model = ParlerTTSForConditionalGeneration.from_pretrained(REPO_ID, revision=REVISION).to(device)
+            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=REVISION)
             description_tokenizer = AutoTokenizer.from_pretrained(model.config.text_encoder._name_or_path)
             _model = (model, tokenizer, description_tokenizer, device)
     return _model
@@ -147,9 +149,9 @@ def _handle_synthesize(msg: dict, stdout) -> None:
 def main() -> int:
     stdin = sys.stdin.buffer
     # Frames go down a private fd; library prints on fd 1 go to stderr (#1428).
-    frame_fd = os.dup(1)
+    _frame_fd = os.dup(1)
     os.dup2(2, 1)
-    stdout = os.fdopen(frame_fd, "wb")
+    stdout = os.fdopen(_frame_fd, "wb")
     _send(stdout, {"op": "ready", "engine": "indic-parler-tts", "sample_rate": 44100})
     while True:
         try:

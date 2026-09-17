@@ -29,12 +29,11 @@ own pins.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 if TYPE_CHECKING:
     import torch  # noqa: F401
@@ -89,10 +88,7 @@ class OmniVoiceSubprocessBackend(SubprocessBackend):
         the deadline. That reclaim is the concrete behavior the in-process
         engine lacks (it abandons but never frees the device).
         """
-        try:
-            return max(30.0, float(os.environ.get("OMNIVOICE_SIDECAR_RECV_TIMEOUT_S", "300")))
-        except (ValueError, TypeError):
-            return 300.0
+        return recv_timeout_from_env("OMNIVOICE_SIDECAR_RECV_TIMEOUT_S", 300.0)
 
     @property
     def sample_rate(self) -> int:

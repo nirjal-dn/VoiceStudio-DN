@@ -2,86 +2,84 @@
 Bootstrap required models into the local Hugging Face cache.
 
 Run this after cloning to download models marked `required: true` in
-`config/models.yaml` so ASR/TTS/LLM paths work out-of-the-box.
+`backend/config/models.yaml`, into the same cache the app reads (it honours
+the project `.env`, the in-app Settings env file and `OMNIVOICE_CACHE_DIR`).
 
 Usage:
     source .venv/bin/activate
     python scripts/bootstrap_models.py
 
-It respects existing HF cache env vars and uses `services.hf_revisions.revision_for`
-so the project pins the correct reviewed revision where available.
+Downloads are pinned to the reviewed revisions in `services/hf_revisions.py`
+and respect each model's `allow_patterns`. Exits 1 if any download failed.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
-import yaml
-import logging
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BACKEND = REPO_ROOT / "backend"
+MODELS_YAML = BACKEND / "config" / "models.yaml"
+
 log = logging.getLogger("bootstrap_models")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MODELS_YAML = REPO_ROOT / "backend" / "config" / "models.yaml"
 
-try:
-    from services.hf_revisions import revision_for
-except Exception:
-    # If running outside backend package path, add backend to sys.path
-    _backend = str(REPO_ROOT / "backend")
-    if _backend not in sys.path:
-        sys.path.insert(0, _backend)
-    from services.hf_revisions import revision_for
+def configure_environment() -> None:
+    """Same env sources and cache routing as backend/main.py, applied before
+    huggingface_hub is imported (it fixes its cache path at import)."""
+    if str(BACKEND) not in sys.path:
+        sys.path.insert(0, str(BACKEND))
+    try:
+        import dotenv
 
-try:
-    from huggingface_hub import snapshot_download
-except Exception as e:
-    log.error("Please install huggingface_hub into your environment: %s", e)
-    raise
+        dotenv.load_dotenv(REPO_ROOT / ".env", override=False)
+    except ImportError:
+        pass
+    from core.user_env import load_into_environ
+    from core.config import apply_cache_dir_env
+
+    load_into_environ()
+    apply_cache_dir_env()
 
 
-def load_models_yaml(path: Path) -> list[dict]:
+def required_models(path: Path = MODELS_YAML) -> list[dict]:
+    import yaml
+
     with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data.get("models", []) if data else []
+        data = yaml.safe_load(f) or {}
+    return [m for m in data.get("models", []) if m.get("required") and m.get("repo_id")]
 
 
-def ensure_cache_env():
-    # honor OMNIVOICE_CACHE_DIR if set; otherwise use HF defaults
-    cache = os.environ.get("OMNIVOICE_CACHE_DIR")
-    if cache:
-        os.environ.setdefault("HF_HOME", cache)
-        os.environ.setdefault("HF_HUB_CACHE", cache)
-        os.environ.setdefault("TORCH_HOME", cache)
+def main() -> int:
+    logging.basicConfig(level=logging.INFO)
+    configure_environment()
+    from huggingface_hub import snapshot_download
+    from services.hf_revisions import revision_for
 
-
-def main():
-    ensure_cache_env()
-    models = load_models_yaml(MODELS_YAML)
-    required = [m for m in models if m.get("required")]
-    if not required:
+    models = required_models()
+    if not models:
         log.info("No required models declared in %s", MODELS_YAML)
-        return
-
-    log.info("Found %d required models", len(required))
-    for spec in required:
-        repo_id = spec.get("repo_id")
-        if not repo_id:
-            continue
+        return 0
+    log.info("Found %d required models (cache: %s)", len(models), os.environ.get("HF_HUB_CACHE", "default"))
+    failed = []
+    for spec in models:
+        repo_id = spec["repo_id"]
+        rev = revision_for(repo_id)
+        log.info("Installing %s (revision=%s)...", repo_id, rev)
         try:
-            rev = revision_for(repo_id)
-        except Exception:
-            rev = None
-        log.info("Installing %s (revision=%s)...", repo_id, rev or "main")
-        try:
-            snapshot_download(repo_id, revision=rev or None)
+            snapshot_download(repo_id, revision=rev, allow_patterns=spec.get("allow_patterns"))
             log.info("Installed %s", repo_id)
-        except Exception as e:
-            log.exception("Failed to install %s: %s", repo_id, e)
-            log.warning("You can install it later via Model Catalogue in the app or rerun this script.")
+        except Exception:  # noqa: BLE001 — report every model, then fail the run
+            log.exception("Failed to install %s", repo_id)
+            failed.append(repo_id)
+    if failed:
+        log.error("Failed: %s. Retry, or install from Model Catalogue in the app.", ", ".join(failed))
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

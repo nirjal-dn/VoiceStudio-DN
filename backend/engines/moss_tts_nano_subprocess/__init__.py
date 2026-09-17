@@ -15,11 +15,9 @@ resolves to this class once that venv exists, and to the in-process
 """
 from __future__ import annotations
 
-import math
-import os
 from pathlib import Path
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 VENV_ENV_VAR = "OMNIVOICE_MOSS_TTS_NANO_DIR"
 
@@ -66,13 +64,7 @@ class MossTTSNanoSubprocessBackend(SubprocessBackend):
     def recv_timeout_s(self) -> float:
         # A cold load downloads the model and its audio tokenizer; the sidecar
         # heartbeats progress frames meanwhile, and each re-arms this deadline.
-        try:
-            v = float(os.environ.get("OMNIVOICE_MOSS_TTS_NANO_RECV_TIMEOUT_S", "900"))
-        except (TypeError, ValueError):
-            return 900.0
-        if not math.isfinite(v):  # reject inf/nan so the deadline can't be disabled
-            return 900.0
-        return max(30.0, v)
+        return recv_timeout_from_env("OMNIVOICE_MOSS_TTS_NANO_RECV_TIMEOUT_S", 900.0)
 
     @property
     def sample_rate(self) -> int:

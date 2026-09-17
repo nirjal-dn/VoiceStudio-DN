@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api/client';
 import { timeAgo, toMillis } from '../utils/relativeTime';
-import { loadTranscriptions, TRANSCRIPTION_EVENT } from '../utils/transcriptionsStore';
+import { loadTranscriptions, subscribeTranscriptions } from '../utils/transcriptionsStore';
 import { audioUrl } from '../api/generate';
 import { playBlobAudio } from '../utils/media';
 
@@ -159,11 +159,7 @@ export default function Projects({
   // Load transcriptions from localStorage (same source as TranscriptionsPage)
   const [transcriptions, setTranscriptions] = useState(loadTranscriptions);
   // Listen for new transcriptions
-  React.useEffect(() => {
-    const handler = () => setTranscriptions(loadTranscriptions());
-    window.addEventListener(TRANSCRIPTION_EVENT, handler);
-    return () => window.removeEventListener(TRANSCRIPTION_EVENT, handler);
-  }, []);
+  React.useEffect(() => subscribeTranscriptions(() => setTranscriptions(loadTranscriptions())), []);
 
   // Normalise every source into a common shape so the filter + search +
   // sort pipeline is identical regardless of origin. Timestamps arrive in

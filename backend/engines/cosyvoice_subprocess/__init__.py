@@ -15,11 +15,10 @@ working as it did.
 """
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 VENV_ENV_VAR = "OMNIVOICE_COSYVOICE_DIR"
 #: Where the installer puts the CosyVoice 3 weights, inside the checkout.
@@ -68,13 +67,7 @@ class CosyVoiceSubprocessBackend(SubprocessBackend):
     def recv_timeout_s(self) -> float:
         # Loading the model and its text normalizers takes a while on a cold
         # start; the sidecar heartbeats progress frames meanwhile.
-        try:
-            v = float(os.environ.get("OMNIVOICE_COSYVOICE_RECV_TIMEOUT_S", "900"))
-        except (TypeError, ValueError):
-            return 900.0
-        if not math.isfinite(v):  # reject inf/nan so the deadline can't be disabled
-            return 900.0
-        return max(30.0, v)
+        return recv_timeout_from_env("OMNIVOICE_COSYVOICE_RECV_TIMEOUT_S", 900.0)
 
     @property
     def sample_rate(self) -> int:

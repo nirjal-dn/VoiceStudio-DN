@@ -25,6 +25,7 @@ from services.asr_backend import (
     ASRTimeoutError,
     reset_pool_after_wedge,
     run_transcribe_guarded,
+    transcribe_in_language,
 )
 from services.audio_io import _safe_soundfile_write
 from services.ffmpeg_utils import find_ffmpeg
@@ -452,11 +453,10 @@ async def preview_upload(video: UploadFile = File(...)):
     safe_name = f"{uuid.uuid4().hex[:12]}"
     vid_path = os.path.join(PREVIEW_DIR, f"{safe_name}{ext}")
     wav_path = os.path.join(PREVIEW_DIR, f"{safe_name}.wav")
-    payload = await video.read()
+    from core.uploads import save_upload
+    await save_upload(video, vid_path)  # bounded memory for multi-GB videos
 
     def _write_and_extract() -> bool:
-        with open(vid_path, "wb") as f:
-            f.write(payload)
         if ext in {".wav", ".mp3", ".m4a", ".aac"}:
             return False
         try:
@@ -615,8 +615,8 @@ async def dub_upload(
     os.makedirs(job_dir, exist_ok=True)
 
     video_path = os.path.join(job_dir, f"original{ext}")
-    with open(video_path, "wb") as f:
-        f.write(await video.read())
+    from core.uploads import save_upload
+    await save_upload(video, video_path)  # bounded memory for multi-GB videos
 
     filename = video.filename or f"video{ext}"
     task_id = f"prep_{job_id}"
@@ -1236,7 +1236,10 @@ async def dub_transcribe_stream(
                     tmp.close()
                     try:
                         _safe_soundfile_write(tmp.name, arr, local_sr)
-                        r = _asr_backend.transcribe(tmp.name, word_timestamps=True)
+                        r = transcribe_in_language(
+                            _asr_backend, tmp.name, job.get("source_lang_override"),
+                            word_timestamps=True,
+                        )
                     finally:
                         try: os.remove(tmp.name)
                         except OSError: pass
@@ -2019,7 +2022,10 @@ async def dub_transcribe(job_id: str, num_speakers: Optional[int] = None):
         try:
             try:
                 logger.info("Transcribing full audio via %s ...", _asr.id)
-                result = _asr.transcribe(asr_audio_target, word_timestamps=True)
+                result = transcribe_in_language(
+                    _asr, asr_audio_target, job.get("source_lang_override"),
+                    word_timestamps=True,
+                )
                 detected_lang = result.get("language")
             except Exception as e:
                 logger.exception("ASR backend %s failed", _asr.id)

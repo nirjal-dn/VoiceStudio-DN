@@ -45,6 +45,10 @@ if not os.environ.get("OMNIVOICE_ENV_FILE"):
 # need a different value monkeypatch it explicitly.
 os.environ["OMNIVOICE_MODEL"] = "test"
 
+# Starlette's TestClient sends ``Host: testserver``; the loopback browser guard
+# (core/loopback_guard.py) only allows hosts that name this machine.
+os.environ.setdefault("OMNIVOICE_ALLOWED_HOSTS", "testserver")
+
 # Background warm-ups must not fire mid-suite: many tests boot the app
 # lifespan via TestClient, and any that exits without a lifespan shutdown
 # leaves the deferred preload task pending — 35s later (mid-suite, in

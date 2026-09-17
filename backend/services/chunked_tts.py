@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import List
 
 logger = logging.getLogger("omnivoice.chunked_tts")
@@ -119,7 +120,9 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) 
         if split_pos == -1:
             split_pos = segment.rfind(" ")
         if split_pos == -1:
-            split_pos = _safe_hard_cut(segment, max_chars)
+            # Full remaining text, not the window: whether the cut splits a
+            # syllable depends on the character just past it.
+            split_pos = _safe_hard_cut(remaining, max_chars)
 
         chunk = remaining[: split_pos + 1].strip()
         if chunk:
@@ -235,9 +238,11 @@ def _find_last_sentence_end(text: str) -> int:
         if _inside_bracket_tag(text, pos):
             continue
         best = pos
-    # Fullwidth sentence enders (ideographic full stop, fullwidth !, ?)
-    # written as escapes to keep the repo's no-literal-CJK gate clean.
-    for m in re.finditer("[\u3002\uff01\uff1f]", text):
+    # Fullwidth sentence enders (ideographic full stop, fullwidth !, ?) and the
+    # Devanagari danda / double danda (Nepali, Hindi, Marathi, Sanskrit), which
+    # end a sentence with no space required. Escapes keep the no-literal-CJK
+    # gate clean.
+    for m in re.finditer("[\u3002\uff01\uff1f\u0964\u0965]", text):
         if m.start() > best:
             best = m.start()
     return best
@@ -264,7 +269,27 @@ def _safe_hard_cut(segment: str, max_chars: int) -> int:
     for m in _BRACKET_TAG_RE.finditer(segment):
         if m.start() < cut < m.end():
             return m.start() - 1 if m.start() > 0 else cut
-    return cut
+    return _grapheme_safe_cut(segment, cut)
+
+
+# Joiners that bind the next character into the same written syllable:
+# Devanagari (and other Indic) virama, ZWNJ, ZWJ.
+_CLUSTER_JOINERS = frozenset("\u094d\u09cd\u0a4d\u0acd\u0b4d\u0bcd\u0c4d\u0ccd\u0d4d\u200c\u200d")
+
+
+def _grapheme_safe_cut(segment: str, cut: int) -> int:
+    """Move a hard cut (index of the chunk's last char) back so it never
+    separates a combining mark (vowel sign, anusvara, nukta) from its base or
+    splits a conjunct after a virama — a chunk starting with a bare vowel sign
+    is unpronounceable. Falls back to the original cut for a pathological run
+    with no safe boundary."""
+    i = cut
+    while 0 <= i < len(segment) - 1 and (
+        unicodedata.category(segment[i + 1]) in ("Mn", "Mc")
+        or segment[i] in _CLUSTER_JOINERS
+    ):
+        i -= 1
+    return i if i >= 0 else cut
 
 
 def _normalize_chunk_shapes(chunks: list) -> list:

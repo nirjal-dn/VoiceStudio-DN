@@ -140,3 +140,44 @@ def test_speech_request_evicts_other_resident_engines(monkeypatch):
     assert r2.status_code == 200, r2.text
     assert a.unloads == 1  # outgoing engine handed its model back
     assert b.unloads == 0  # incoming engine untouched
+
+
+def test_ws_tts_engine_override_reuses_the_cached_instance(monkeypatch):
+    """/ws/tts with an explicit engine used to build a fresh backend per
+    message: a new sidecar/model copy per utterance and a leaked atexit hook."""
+    import asyncio
+
+    from api.routers import tts_stream
+    from services import tts_backend
+
+    evicted = []
+
+    async def fake_evict(keep_id):
+        evicted.append(keep_id)
+        return []
+
+    class _FakeBackend:
+        id = "fake-stream-engine"
+        instances = 0
+
+        def __init__(self):
+            _FakeBackend.instances += 1
+
+    monkeypatch.setattr("services.engine_memory.evict_other_tts_engines", fake_evict)
+    monkeypatch.setattr(tts_backend, "get_backend_class", lambda _id: _FakeBackend)
+    try:
+        first = asyncio.run(tts_stream._resolve_stream_backend("fake-stream-engine"))
+        second = asyncio.run(tts_stream._resolve_stream_backend("fake-stream-engine"))
+        assert first is second and _FakeBackend.instances == 1
+        assert evicted == ["fake-stream-engine", "fake-stream-engine"]
+    finally:
+        tts_backend._ENGINE_INSTANCES.pop(_FakeBackend, None)
+
+
+def test_unknown_model_error_lists_registered_engines(oc):
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        oc._resolve_engine("no-such-engine")
+    assert "xtts-nepali" in exc.value.detail and "tts-1" in exc.value.detail

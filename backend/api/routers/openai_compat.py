@@ -192,12 +192,13 @@ def _resolve_engine(model_id: str):
         # bespoke unload here.
         return get_engine_instance_for(model_id)
     except ValueError:
+        from services.tts_backend import _REGISTRY
+
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Unknown model '{model_id}'. Use one of: "
-                "omnivoice, voxcpm2, cosyvoice, mlx-audio, kittentts, "
-                "moss-tts-nano, indextts2, gpt-sovits, sherpa-onnx, tts-1, tts-1-hd."
+                f"{', '.join([*sorted(_REGISTRY), 'tts-1', 'tts-1-hd'])}."
             ),
         )
 
@@ -537,6 +538,7 @@ async def create_transcription(
 ):
     """Transcribe audio to text. Compatible with OpenAI's POST /v1/audio/transcriptions."""
     from services.asr_backend import (
+        ASRLanguageNotSupportedError,
         ASRModelMissingError,
         asr_model_missing_detail,
         asr_model_missing_error,
@@ -559,9 +561,10 @@ async def create_transcription(
     # Write uploaded file to a temp location
     suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
     try:
+        from core.uploads import copy_upload
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
-            tmp.write(content)
+            await copy_upload(file, tmp)  # long recordings: bounded memory
             tmp_path = tmp.name
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not read audio file: {e}")
@@ -582,8 +585,9 @@ async def create_transcription(
         # weights, so it belongs inside the pool with the transcribe call —
         # never on the event loop.
         def _run():
+            from services.asr_backend import transcribe_in_language
             backend = load_active_asr_backend()
-            return backend.transcribe(tmp_path, word_timestamps=word_ts)
+            return transcribe_in_language(backend, tmp_path, language, word_timestamps=word_ts)
 
         result = await run_transcribe_guarded(_gpu_pool, _run, what="OpenAI")
 
@@ -653,6 +657,8 @@ async def create_transcription(
 
     except HTTPException:
         raise
+    except ASRLanguageNotSupportedError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ASRModelMissingError as e:
         # A degraded-to candidate has no weights on disk. Same typed 409 the
         # preflight above raises — never a 500, and never a silent multi-GB

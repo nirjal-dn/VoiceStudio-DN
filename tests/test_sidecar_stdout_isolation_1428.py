@@ -50,6 +50,8 @@ EXPECTED_SIDECARS = {
     ENGINES / "moss_tts_nano_subprocess" / "main.py",
     ENGINES / "cosyvoice_subprocess" / "main.py",
     ENGINES / "supertonic3" / "sidecar.py",
+    ENGINES / "xtts_nepali" / "main.py",
+    ENGINES / "indic_parler" / "main.py",
 }
 
 
@@ -139,3 +141,36 @@ def test_a_printing_library_cannot_corrupt_the_frame_stream(tmp_path):
     err = proc.stderr.decode()
     assert "noisy library banner" in err
     assert "native print straight to fd 1" in err
+
+
+# ── recv deadline parsing is shared, never disabled ─────────────────────────
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    (None, 450.0), ("120", 120.0), ("5", 30.0), ("inf", 450.0), ("-inf", 450.0),
+    ("nan", 450.0), ("soon", 450.0), ("", 450.0),
+])
+def test_recv_timeout_from_env(monkeypatch, raw, expected):
+    from services.subprocess_backend import recv_timeout_from_env
+
+    if raw is None:
+        monkeypatch.delenv("OMNIVOICE_TEST_RECV_TIMEOUT_S", raising=False)
+    else:
+        monkeypatch.setenv("OMNIVOICE_TEST_RECV_TIMEOUT_S", raw)
+    assert recv_timeout_from_env("OMNIVOICE_TEST_RECV_TIMEOUT_S", 450.0) == expected
+
+
+def test_omnivoice_sidecar_deadline_cannot_be_disabled(monkeypatch):
+    from engines.omnivoice_subprocess import OmniVoiceSubprocessBackend
+
+    monkeypatch.setenv("OMNIVOICE_SIDECAR_RECV_TIMEOUT_S", "inf")
+    backend = OmniVoiceSubprocessBackend.__new__(OmniVoiceSubprocessBackend)
+    assert backend.recv_timeout_s == 300.0
+
+
+def test_sidecar_engines_share_the_deadline_parser():
+    engines = sorted(p.parent.name for p in ENGINES.glob("*/__init__.py")
+                     if "def recv_timeout_s" in p.read_text(encoding="utf-8"))
+    for name in engines:
+        src = (ENGINES / name / "__init__.py").read_text(encoding="utf-8")
+        assert "recv_timeout_from_env(" in src, f"{name} re-implements recv deadline parsing"

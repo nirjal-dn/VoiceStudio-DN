@@ -15,6 +15,19 @@ def get_app_data_dir():
         return os.path.expanduser("~/.omnivoice")
 
 
+def apply_cache_dir_env() -> None:
+    """Route the Hugging Face and Torch caches to ``OMNIVOICE_CACHE_DIR`` when
+    set (the Settings "models directory"). Must run before huggingface_hub is
+    imported: it reads its cache location once, at import. Shared by the app
+    and scripts/bootstrap_models.py so both install into the same cache."""
+    cache_dir = os.environ.get("OMNIVOICE_CACHE_DIR")
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ["HF_HOME"] = cache_dir
+        os.environ["HF_HUB_CACHE"] = cache_dir
+        os.environ["TORCH_HOME"] = cache_dir
+
+
 def _configured_hf_token_path():
     """Match Hub's token location without importing or refreshing credentials."""
     default_cache = os.path.join(os.path.expanduser("~"), ".cache")

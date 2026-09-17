@@ -45,6 +45,22 @@ models:
     required: true
     curated_on: [all]
 
+  - repo_id: "Oshara/xtts-v2-nepali"
+    label: "XTTS v2 Nepali (Oshara fine-tune — Nepali voice cloning)"
+    role: TTS
+    engines: [xtts-nepali]
+    size_gb: 1.9
+    allow_patterns:
+      - "epoch-20/*"
+    note: "Weights inherit the Coqui Public Model License: non-commercial use only. The engine also needs its own venv (see docs/engines/xtts-nepali.md)."
+
+  - repo_id: "ai4bharat/indic-parler-tts"
+    label: "Indic Parler-TTS (Nepali + 20 Indian languages, voice by description)"
+    role: TTS
+    engines: [indic-parler-tts]
+    size_gb: 3.8
+    note: "Gated on Hugging Face: accept the model terms and set a Hugging Face token first. Apache-2.0. The engine also needs its own venv (see docs/engines/indic-parler-tts.md)."
+
   - repo_id: "audio-cpp/audio.cpp-gguf"
     label: "Breeze-TTS-2 Q8_0 for audio.cpp (English + Chinese, clone + design)"
     role: TTS
@@ -100,6 +116,13 @@ models:
     engines: [pytorch-whisper]
     size_gb: 2.9
     note: "Previous-generation OpenAI Whisper large model for compatibility and legacy local transcription workloads."
+
+  - repo_id: "ai4bharat/indic-conformer-600m-multilingual"
+    label: "IndicConformer 600M (Nepali + 21 Indian languages, CPU)"
+    role: ASR
+    engines: [indic-conformer]
+    size_gb: 2.4
+    note: "Gated on Hugging Face: accept the model terms and set a Hugging Face token (Settings → API Keys) before installing. MIT licence."
 
   - repo_id: "mlx-community/whisper-tiny-mlx"
     label: "Whisper tiny (MLX ASR — fast fallback)"

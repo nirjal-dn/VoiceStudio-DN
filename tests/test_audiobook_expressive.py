@@ -352,3 +352,29 @@ def test_repeated_line_is_deduped_by_default(tmp_path):
 def test_vary_repeats_gives_each_repeat_its_own_take(tmp_path):
     # Opt-out on: each occurrence gets a distinct cache slot → both synthesize.
     assert _count_synth_calls(tmp_path, ExpressiveOptions(vary_repeats=True)) == 2
+
+
+def test_generic_engine_instance_is_reused_across_chapters(monkeypatch):
+    """_build_synth runs once per chapter; building a fresh engine each time
+    spawned a new sidecar / model copy per chapter that nothing freed."""
+    import api.routers.audiobook as ab
+    import services.tts_backend as tb
+
+    calls = []
+    _patch_generic_engine(monkeypatch, calls)
+    monkeypatch.setattr(ab, "_resolve_voice", lambda _vid: _RESOLVE(_vid))
+    fake = tb.get_backend_class("fake-longform-engine")
+    constructed = []
+    original_init = fake.__init__
+
+    def counting_init(self, *a, **k):
+        constructed.append(self)
+        original_init(self, *a, **k)
+
+    monkeypatch.setattr(fake, "__init__", counting_init)
+    try:
+        ab._build_synth(None)["synth"]("chapter one", None)
+        ab._build_synth(None)["synth"]("chapter two", None)
+        assert len(constructed) == 1
+    finally:
+        tb._ENGINE_INSTANCES.pop(fake, None)

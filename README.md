@@ -130,16 +130,16 @@ bun install
 bun run desktop
 ```
 
-### After cloning: install required models (optional)
+### After cloning: pre-download the required model (optional)
 
-If you cloned the repo for development or to run the backend from source, install the required models so ASR/TTS/LLM engines work locally:
+To fetch the model the app needs before first launch (instead of on first generate), run:
 
 ```bash
 source .venv/bin/activate  # or your venv
 python scripts/bootstrap_models.py
 ```
 
-This downloads models marked `required: true` in [backend/config/models.yaml](backend/config/models.yaml).
+It downloads the models marked `required: true` in [backend/config/models.yaml](backend/config/models.yaml) — today the VoiceStudio TTS model — pinned to reviewed revisions, into the same cache the app uses (`OMNIVOICE_CACHE_DIR` / the Settings models directory are honoured), and exits non-zero if a download fails. Speech recognition and optional engines (including the [Nepali models](docs/nepali.md)) install from Model Catalogue.
 
 The desktop launcher configures Python dependencies on first run via `uv` automatically. Use `bun run dev` for the browser UI. See [Contributing](.github/CONTRIBUTING.md) for services, tests, and platform packages.
 

@@ -6,8 +6,9 @@ feature extractor, and both runtimes are already in the app environment, so
 this skips the model card's ``trust_remote_code`` transformers wrapper and
 drives the graphs directly (greedy CTC, which also yields word timestamps).
 
-Each recording is transcribed in one pass over the whole file, never in
-chunks. Output is in the language's native script; for Devanagari languages
+A recording up to 90 s is transcribed in one pass over the whole file; longer
+audio is cut at quiet points into windows of at most 90 s so memory stays
+bounded. Output is in the language's native script; for Devanagari languages
 (Nepali by default) anything outside the Devanagari block is removed, so a
 stray token can never surface as Latin, Arabic or Hangul text. The CTC model
 predicts no punctuation, so each pause-delimited segment (a spoken sentence)
@@ -29,11 +30,12 @@ import os
 import re
 import threading
 
-from services.asr_backend import ASRBackend, _load_audio_16k_mono_f32
+from services.asr_backend import ASRBackend, ASRLanguageNotSupportedError, _load_audio_16k_mono_f32
 
 logger = logging.getLogger("omnivoice.asr.indic_conformer")
 
 REPO_ID = "ai4bharat/indic-conformer-600m-multilingual"
+#: Reviewed immutable revision (services/hf_revisions.py is the source of truth).
 REVISION = "e9b71b369c048e2c6b634d4c131061c34e441179"
 LANGUAGES = (
     "as", "bn", "brx", "doi", "gu", "hi", "kn", "kok", "ks", "mai", "ml",
@@ -49,6 +51,13 @@ _BLANK_ID = 256
 _FRAME_S = 0.08
 #: A pause this long starts a new segment.
 _SEGMENT_GAP_S = 0.8
+#: Longest audio run through the encoder in one pass. Encoder memory grows with
+#: length (measured on CPU: +0.4 GB at 30 s, +1.0 GB at 120 s), so longer files
+#: are cut into windows of at most this length.
+_MAX_PASS_S = 90.0
+#: Each cut lands at the quietest 20 ms in the last this-many seconds of a window.
+_CUT_SEARCH_S = 10.0
+_CUT_FRAME_S = 0.02
 _REQUIRED_ASSETS = (
     "preprocessor.ts",
     "encoder.onnx",
@@ -69,7 +78,21 @@ def _missing_assets(root: str) -> list[str]:
             if not os.path.isfile(os.path.join(assets, name))]
 
 
-def _language() -> str:
+def _language(requested=None) -> str:
+    """The request's language when it names one of the 22 supported languages;
+    otherwise the configured default. A specific unsupported language raises
+    rather than transcribing, say, English speech with the Nepali vocabulary."""
+    if requested:
+        from services.languages import iso_code
+
+        code = iso_code(requested)
+        if code:
+            if code not in LANGUAGES:
+                raise ASRLanguageNotSupportedError(
+                    f"IndicConformer does not transcribe {requested!r}; it supports: "
+                    f"{', '.join(LANGUAGES)}. Pick another speech-recognition engine for it."
+                )
+            return code
     lang = os.environ.get("OMNIVOICE_INDIC_CONFORMER_LANG", "ne").strip().lower()
     if lang not in LANGUAGES:
         raise ValueError(
@@ -133,35 +156,40 @@ class _Runtime:
         )
         logits = self.ctc.run(["logprobs"], {"encoder_output": enc})[0][0, : int(enc_len[0])]
         best, path = torch.from_numpy(logits[:, self.masks[lang]]).log_softmax(-1).max(-1)
-        vocab = self.vocab[lang]
+        return ctc_words(path.tolist(), best.tolist(), self.vocab[lang], lang)
 
-        words: list[list] = []  # [text, start, end, logprob_sum, frames]
-        prev = _BLANK_ID
-        for f, (tok, lp) in enumerate(zip(path.tolist(), best.tolist())):
-            if tok == _BLANK_ID:
-                prev = tok
-                continue
-            end = (f + 1) * _FRAME_S
-            if tok == prev:  # one token held across frames
-                words[-1][2] = end
-                words[-1][3] += lp
-                words[-1][4] += 1
-                continue
+
+def ctc_words(path, logprobs, vocab, lang: str) -> list[tuple[str, float, float, float]]:
+    """Greedy CTC collapse of per-frame token ids into words, as
+    (text, start_s, end_s, probability). ``▁`` starts a word; blanks separate
+    repeats; probability is exp(mean log-prob) over the word's frames."""
+    words: list[list] = []  # [text, start, end, logprob_sum, frames]
+    prev = _BLANK_ID
+    for f, (tok, lp) in enumerate(zip(path, logprobs)):
+        if tok == _BLANK_ID:
             prev = tok
-            piece = vocab[tok]
-            if piece.startswith("▁") or not words:
-                words.append([piece.lstrip("▁"), f * _FRAME_S, end, lp, 1])
-            else:
-                words[-1][0] += piece
-                words[-1][2] = end
-                words[-1][3] += lp
-                words[-1][4] += 1
-        out = []
-        for text, start, stop, lp_sum, n in words:
-            text = clean_word(text, lang)
-            if text:
-                out.append((text, start, stop, math.exp(lp_sum / n)))
-        return out
+            continue
+        end = (f + 1) * _FRAME_S
+        if tok == prev:  # one token held across frames
+            words[-1][2] = end
+            words[-1][3] += lp
+            words[-1][4] += 1
+            continue
+        prev = tok
+        piece = vocab[tok]
+        if piece.startswith("▁") or not words:
+            words.append([piece.lstrip("▁"), f * _FRAME_S, end, lp, 1])
+        else:
+            words[-1][0] += piece
+            words[-1][2] = end
+            words[-1][3] += lp
+            words[-1][4] += 1
+    out = []
+    for text, start, stop, lp_sum, n in words:
+        text = clean_word(text, lang)
+        if text:
+            out.append((text, start, stop, math.exp(lp_sum / n)))
+    return out
 
 
 def _load() -> _Runtime:
@@ -201,7 +229,7 @@ def _load() -> _Runtime:
                     raise RuntimeError(
                         f"IndicConformer model snapshot is incomplete; missing "
                         f"{', '.join(f'assets/{name}' for name in missing)}. "
-                        "Retry the model download from Settings -> Model Catalogue "
+                        "Reinstall it from Model Catalogue (IndicConformer weights) "
                         "after accepting the Hugging Face model terms."
                     ) from exc
                 missing = _missing_assets(root)
@@ -213,6 +241,30 @@ def _load() -> _Runtime:
             logger.info("loading IndicConformer from %s", root)
             _runtime = _Runtime(root)
         return _runtime
+
+
+def _windows(audio) -> list[tuple[int, int]]:
+    """(start, end) sample ranges of at most _MAX_PASS_S, cut at the quietest
+    point near each window's end so a cut rarely lands inside a word."""
+    import numpy as np
+
+    total = len(audio)
+    limit = int(_MAX_PASS_S * _SAMPLE_RATE)
+    if total <= limit:
+        return [(0, total)]
+    frame = int(_CUT_FRAME_S * _SAMPLE_RATE)
+    search = int(_CUT_SEARCH_S * _SAMPLE_RATE)
+    out: list[tuple[int, int]] = []
+    start = 0
+    while total - start > limit:
+        region = audio[start + limit - search:start + limit]
+        usable = len(region) // frame * frame
+        energy = np.square(region[:usable].reshape(-1, frame)).mean(axis=1)
+        cut = start + limit - search + int(np.argmin(energy)) * frame + frame // 2
+        out.append((start, cut))
+        start = cut
+    out.append((start, total))
+    return out
 
 
 def _segments(words, word_timestamps: bool, lang: str) -> list[dict]:
@@ -243,6 +295,9 @@ class IndicConformerBackend(ASRBackend):
     serves_capture = True
     # Dictation sends the whole recording once it stops; never partials or chunks.
     whole_recording = True
+    accepts_language = True
+    # The weights the missing-model preflight checks and the catalogue installs.
+    model_repo_id = REPO_ID
     # Language the UI selects instead of "Auto" while this engine is active.
     default_language = os.environ.get("OMNIVOICE_INDIC_CONFORMER_LANG", "ne").strip().lower()
 
@@ -273,16 +328,23 @@ class IndicConformerBackend(ASRBackend):
     def ensure_loaded(self) -> None:
         _load()
 
-    def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
-        lang = _language()
+    def transcribe(self, audio_path: str, *, word_timestamps: bool = True, language=None) -> dict:
+        lang = _language(language)
         audio, _sr = _load_audio_16k_mono_f32(audio_path)
         words = []
         if len(audio) >= _SAMPLE_RATE // 10:
             runtime = _load()
-            # ponytail: one pass over the whole recording as required; encoder
-            # memory grows with length, so very long files need a bigger box.
+            # A recording up to _MAX_PASS_S is one pass; longer audio runs in
+            # windows (bounded memory) with word times shifted back.
             with _infer_lock:
-                words = runtime.words(audio, lang)
+                for begin, end in _windows(audio):
+                    if end - begin < _SAMPLE_RATE // 10:
+                        continue
+                    offset = begin / _SAMPLE_RATE
+                    words.extend(
+                        (text, start + offset, stop + offset, prob)
+                        for text, start, stop, prob in runtime.words(audio[begin:end], lang)
+                    )
         segments = _segments(words, word_timestamps, lang)
         return {
             "text": " ".join(s["text"] for s in segments),
@@ -297,4 +359,4 @@ class IndicConformerBackend(ASRBackend):
             _runtime = None
 
 
-__all__ = ["IndicConformerBackend", "LANGUAGES", "REPO_ID", "clean_word"]
+__all__ = ["IndicConformerBackend", "LANGUAGES", "REPO_ID", "clean_word", "ctc_words"]

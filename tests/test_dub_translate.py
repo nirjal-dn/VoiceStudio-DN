@@ -545,3 +545,204 @@ async def test_openai_env_fallback_still_works(monkeypatch):
     resp = await dub_translate.dub_translate(req)
     assert resp["translated"][0]["text"] == "hola mundo"
     assert calls and calls[0]["model"] == "env-model"
+
+
+# ── NLLB: Nepali support, no silent English fallback ─────────────────────────
+
+
+def _install_fake_nllb(monkeypatch):
+    """Fake tokenizer/model that echo the forced target code, so the test sees
+    which FLORES code the NLLB branch picked without loading weights."""
+    from api.routers import dub_translate
+
+    class _Tok:
+        src_lang = None
+
+        def __call__(self, text, return_tensors=None):
+            return {}
+
+        def convert_tokens_to_ids(self, code):
+            return code
+
+        def batch_decode(self, tokens, skip_special_tokens=True):
+            return [tokens]
+
+    class _Model:
+        def to(self, device):
+            return self
+
+        def generate(self, forced_bos_token_id=None, **kw):
+            return f"[{forced_bos_token_id}]"
+
+    monkeypatch.setattr(dub_translate, "_nllb_tokenizer", None)
+    monkeypatch.setattr(dub_translate, "_nllb_model", None)
+    monkeypatch.setattr(
+        dub_translate, "_load_nllb_component",
+        lambda factory: _Tok() if "Tokenizer" in factory.__name__ else _Model(),
+    )
+    monkeypatch.setattr(dub_translate, "_unload_nllb", lambda: None)
+    return dub_translate
+
+
+@pytest.mark.asyncio
+async def test_nllb_translates_to_nepali_flores_code(monkeypatch):
+    from schemas.requests import TranslateRequest, TranslateSegment
+
+    dub_translate = _install_fake_nllb(monkeypatch)
+    req = TranslateRequest(
+        segments=[TranslateSegment(id="s1", text="Hello")],
+        target_lang="ne", provider="nllb", source_lang="en",
+    )
+    resp = await dub_translate.dub_translate(req)
+    rows = resp["translated"] if isinstance(resp, dict) else resp
+    assert rows[0]["text"] == "[npi_Deva]"
+    assert "error" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_nllb_unmapped_target_errors_instead_of_english(monkeypatch):
+    from schemas.requests import TranslateRequest, TranslateSegment
+
+    dub_translate = _install_fake_nllb(monkeypatch)
+    req = TranslateRequest(
+        segments=[TranslateSegment(id="s1", text="Hello")],
+        target_lang="xx", provider="nllb", source_lang="en",
+    )
+    resp = await dub_translate.dub_translate(req)
+    rows = resp["translated"] if isinstance(resp, dict) else resp
+    assert rows[0]["text"] == "Hello"
+    assert "xx" in rows[0]["error"]
+
+
+def test_nepali_language_name_for_llm_prompts():
+    from api.routers.dub_translate import LANG_NAMES
+    assert LANG_NAMES["ne"] == "Nepali"
+
+
+# ── deep_translator providers: blank segments, Nepali text, event loop ───────
+
+
+def _install_fake_google(monkeypatch, translate):
+    import sys
+    import types
+
+    from api.routers import dub_translate
+
+    class _Google:
+        def __init__(self, source=None, target=None, proxies=None):
+            self.source, self.target = source, target
+
+        def translate(self, text):
+            return translate(self, text)
+
+    module = types.ModuleType("deep_translator")
+    module.GoogleTranslator = _Google
+    monkeypatch.setitem(sys.modules, "deep_translator", module)
+
+    async def _passthrough(rows, req, src_lang, loop, **kw):
+        return rows
+
+    monkeypatch.setattr(dub_translate, "_maybe_cinematic", _passthrough)
+    monkeypatch.delenv("OMNIVOICE_TRANSLATE_FALLBACK", raising=False)
+    return dub_translate
+
+
+@pytest.mark.asyncio
+async def test_blank_segments_are_kept_and_never_sent_to_the_provider(monkeypatch):
+    from schemas.requests import TranslateRequest, TranslateSegment
+
+    sent = []
+
+    def translate(tr, text):
+        sent.append(text)
+        return {"Good morning": "शुभ प्रभात", "Thank you": "धन्यवाद"}[text]
+
+    dub_translate = _install_fake_google(monkeypatch, translate)
+    req = TranslateRequest(
+        segments=[
+            TranslateSegment(id="1", text="Good morning"),
+            TranslateSegment(id="2", text="   "),
+            TranslateSegment(id="3", text=""),
+            TranslateSegment(id="4", text="Thank you"),
+        ],
+        target_lang="ne", provider="google", source_lang="en",
+    )
+    rows = await dub_translate.dub_translate(req)
+    assert [r["text"] for r in rows] == ["शुभ प्रभात", "   ", "", "धन्यवाद"]
+    assert sorted(sent) == ["Good morning", "Thank you"]
+    assert all("error" not in r for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_nepali_source_text_is_sent_with_nepali_code(monkeypatch):
+    from schemas.requests import TranslateRequest, TranslateSegment
+
+    seen = []
+
+    def translate(tr, text):
+        seen.append((tr.source, tr.target, text))
+        return "The meeting starts tomorrow at 10:30."
+
+    dub_translate = _install_fake_google(monkeypatch, translate)
+    req = TranslateRequest(
+        segments=[TranslateSegment(id="1", text="बैठक भोलि बिहान 10:30 बजे सुरु हुनेछ।")],
+        target_lang="en", provider="google", source_lang="ne",
+    )
+    rows = await dub_translate.dub_translate(req)
+    assert rows[0]["text"] == "The meeting starts tomorrow at 10:30."
+    assert seen == [("ne", "en", "बैठक भोलि बिहान 10:30 बजे सुरु हुनेछ।")]
+
+
+@pytest.mark.asyncio
+async def test_slow_provider_does_not_block_the_event_loop(monkeypatch):
+    """Provider calls run on the CPU pool: a slow translator must not freeze
+    every other request (SSE progress, health checks) while a dub translates."""
+    import time
+
+    from schemas.requests import TranslateRequest, TranslateSegment
+
+    def translate(tr, text):
+        time.sleep(0.3)
+        return f"अनुवाद: {text}"
+
+    dub_translate = _install_fake_google(monkeypatch, translate)
+    req = TranslateRequest(
+        segments=[TranslateSegment(id=str(i), text=f"line {i}") for i in range(4)],
+        target_lang="ne", provider="google", source_lang="en",
+    )
+
+    gaps = []
+
+    async def ticker():
+        last = time.monotonic()
+        for _ in range(12):
+            await asyncio.sleep(0.05)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    ticking = asyncio.create_task(ticker())
+    await asyncio.sleep(0)  # the ticker must be running before translation starts
+    rows = await dub_translate.dub_translate(req)
+    await ticking
+    assert len(rows) == 4
+    assert max(gaps) < 0.25, f"event loop stalled for {max(gaps):.2f}s"
+
+
+def test_nepali_comes_from_the_language_registry():
+    from api.routers import dub_translate
+
+    assert dub_translate.FLORES_CODES["ne"] == "npi_Deva"
+    assert dub_translate.LANG_NAMES["ne"] == "Nepali"
+    assert dub_translate.LANG_REQUIRED_SCRIPT["ne"][1] == (0x0900, 0x097F)
+
+
+@pytest.mark.parametrize(("text", "ok"), [
+    ("भोलि बिहान बैठक सुरु हुनेछ।", True),
+    ("The meeting starts tomorrow morning.", False),
+    ("bholi bihana baithak suru hunechha", False),
+])
+def test_llm_output_for_nepali_must_be_devanagari(text, ok):
+    from api.routers import dub_translate
+
+    assert dub_translate._looks_like_target(text, "ne") is ok

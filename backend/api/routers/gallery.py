@@ -10,6 +10,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -228,6 +229,11 @@ async def download_youtube_clip(
     description: str = Query("", description="Optional description"),
 ):
     """Download a clip from YouTube for voice cloning."""
+    # video_url is handed to yt-dlp as argv: only an http(s) URL may reach it,
+    # and "--" below stops yt-dlp from parsing it as an option either way.
+    parts = urlsplit(video_url.strip())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise HTTPException(status_code=400, detail="video_url must be an http(s) URL")
     voice_id = str(uuid.uuid4())[:8]
     output_path = str(VOICE_GALLERY_DIR / f"{voice_id}.wav")
     temp_path = str(VOICE_GALLERY_DIR / f"{voice_id}.%(ext)s")
@@ -249,7 +255,8 @@ async def download_youtube_clip(
             "0",
             "-o",
             temp_path,
-            video_url,
+            "--",
+            video_url.strip(),
         ]
 
         result = await spawn_subprocess(

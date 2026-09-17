@@ -570,6 +570,10 @@ def normalize_text(text: str, language: Optional[str] = None) -> str:
     if not text:
         return text or ""
     out = _safety_filters(text)
+    # Languages with their own speech normalizer (services/languages.py, e.g.
+    # Nepali numbers/dates/times) — num2words has no such locale for them.
+    from services.languages import normalize_for_speech
+    out = _outside_brackets(out, lambda t: normalize_for_speech(t, language))
     # Runs outside the num2words gate below: ko/ja/zh keep their digits (that
     # gate returns None for them) but still need the range mark spoken.
     plain = _plain_lang_code(language)

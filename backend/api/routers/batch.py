@@ -118,16 +118,9 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 async def _save_upload(upload: UploadFile, destination: str) -> None:
-    try:
-        with open(destination, "wb") as output:
-            while chunk := await upload.read(_UPLOAD_CHUNK_BYTES):
-                output.write(chunk)
-    except BaseException:
-        try:
-            unlink_if_present(destination)
-        except FileCleanupError:
-            logger.warning("Could not remove incomplete batch upload", exc_info=True)
-        raise
+    from core.uploads import save_upload
+
+    await save_upload(upload, destination)
 
 
 def _native_batch_width(backend) -> int:

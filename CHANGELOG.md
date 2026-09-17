@@ -15,8 +15,21 @@ the frozen-backend fallback mirror it for their toolchains.
 - MOSS-TTS-Nano installs in one click into its own environment, pinned to a reviewed upstream commit it works with (#2022)
 - CosyVoice 3 installs in one click into its own environment, with a trimmed dependency set that needs no TensorRT, DeepSpeed or third-party package feed (#2025)
 
+### Added
+
+- XTTS v2 Nepali engine (Oshara fine-tune) for Nepali speech and voice cloning, in its own environment; weights are non-commercial — thanks @nirjal-dn!
+- IndicConformer speech recognition for Nepali and 21 other Indian languages, including whole-recording dictation — thanks @nirjal-dn!
+- Indic Parler-TTS engine: Nepali and 20 other Indian languages, with the voice chosen by a text description — thanks @nirjal-dn!
+
 ### Changed
 
+- Nepali numbers, Bikram Sambat and Gregorian dates, times, percentages and phone numbers are spoken as Nepali words by every TTS engine; see docs/nepali.md
+- Long Nepali text is split at the danda, and a forced cut never separates a vowel sign or conjunct from its consonant
+- IndicConformer transcribes in the request's language (Dubbing source, `/transcribe`, voice language) and handles recordings of any length in passes of at most 90 s
+- IndicConformer, XTTS v2 Nepali and Indic Parler-TTS weights are listed in Model Catalogue and pinned; an uninstalled IndicConformer asks before downloading
+- Speech uploads at 44.1/48 kHz are resampled with an anti-aliasing filter before transcription
+- XTTS v2 Nepali skips transcribing the reference clip, and both Nepali TTS engines honour the request seed
+- A voice's auto-transcribed reference is stored only when it is written in the voice language's script
 - Model Catalogue is one page: a setup summary (speech, transcription, dictation, language model) on top, one TTS / ASR / LLM switch, and each family's downloadable weights listed under its engines; the separate Models pane and the Settings → Voice → Engines / Models signposts are gone, the models directory and voice previews moved to Settings → Storage and the HF mirror to Network (#2013)
 - The engine list is one line per engine (engine, device it runs on, status, one action) with a detail panel for everything else; each engine's weights install from its panel, so the separate weights list and recommendation card are gone (#2020)
 - CosyVoice 3 installs patched protobuf and transformers releases, clearing five security advisories (#2030, #2031)

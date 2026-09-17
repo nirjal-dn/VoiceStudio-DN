@@ -64,7 +64,7 @@ class _CountingTranscribe:
         self.calls = 0
         self.result = result
 
-    def __call__(self, audio_path):
+    def __call__(self, audio_path, language=None):
         self.calls += 1
         return self.result
 
@@ -223,3 +223,62 @@ def test_locked_profile_transcript_not_persisted(client, monkeypatch, locked_pro
     _generate(client, locked_profile, fake)
     assert counting.calls == 1
     assert _profile_ref_text(locked_profile) == ""
+
+
+# ── Language awareness (Nepali) ─────────────────────────────────────────────
+
+
+class _LanguageRecordingTranscribe(_CountingTranscribe):
+    def __init__(self, result):
+        super().__init__(result)
+        self.languages = []
+
+    def __call__(self, audio_path, language=None):
+        self.languages.append(language)
+        return super().__call__(audio_path)
+
+
+def test_engine_that_does_not_use_transcripts_skips_reference_asr(client, monkeypatch, clone_profile):
+    """XTTS clones from audio alone: no ASR pass (and no ASR model load/download)."""
+    import services.asr_backend as ab
+
+    fake = _make_fake_engine("fake-audio-only-clone")
+    fake.uses_ref_text = False
+    monkeypatch.setitem(_tts_mod()._REGISTRY, fake.id, fake)
+    fake.calls.clear()
+    counting = _CountingTranscribe()
+    monkeypatch.setattr(ab, "transcribe_reference", counting)
+
+    _generate(client, clone_profile, fake, text="नमस्ते साथी।", language="Nepali")
+    assert counting.calls == 0
+    assert _profile_ref_text(clone_profile) == ""
+
+
+def test_reference_asr_receives_the_request_language(client, monkeypatch, clone_profile):
+    import services.asr_backend as ab
+
+    fake = _make_fake_engine()
+    monkeypatch.setitem(_tts_mod()._REGISTRY, fake.id, fake)
+    recording = _LanguageRecordingTranscribe("मेरो नाम सीता श्रेष्ठ हो।")
+    monkeypatch.setattr(ab, "transcribe_reference", recording)
+
+    _generate(client, clone_profile, fake, text="नमस्ते।", language="Nepali")
+    assert recording.languages == ["Nepali"]
+    assert _profile_ref_text(clone_profile) == "मेरो नाम सीता श्रेष्ठ हो।"
+
+
+def test_wrong_script_transcript_is_used_once_but_never_stored(client, monkeypatch, clone_profile):
+    """An auto-detecting ASR that hears a Nepali clip as English must not
+    poison the profile: the transcript is not cached onto the row."""
+    import services.asr_backend as ab
+
+    fake = _make_fake_engine()
+    monkeypatch.setitem(_tts_mod()._REGISTRY, fake.id, fake)
+    fake.calls.clear()
+    recording = _LanguageRecordingTranscribe("mero naam sita shrestha ho")
+    monkeypatch.setattr(ab, "transcribe_reference", recording)
+
+    _generate(client, clone_profile, fake, text="नमस्ते।", language="Nepali")
+    assert _profile_ref_text(clone_profile) == ""
+    _generate(client, clone_profile, fake, text="नमस्ते।", language="Nepali")
+    assert len(recording.languages) == 2  # not cached: asked again next time

@@ -31,13 +31,15 @@ uv pip install --python "$D/.venv/bin/python" coqui-tts==0.27.5 transformers==4.
 
 On Windows, the interpreter is at `.venv\Scripts\python.exe`.
 
-The ~1.9 GB checkpoint downloads from Hugging Face on the first generate. After that it
-loads from the cache.
+The ~1.9 GB checkpoint is listed in **Model Catalogue** (XTTS v2 Nepali weights) and pinned to a
+reviewed revision. If it is not installed, it downloads from Hugging Face on the first generate and
+loads from the cache after that.
 
-Before Nepali synthesis, numeric dates, decimals, and cardinal numbers are converted
-to Nepali words so the Hindi tokenizer does not have to guess how to read Arabic
-digits. Short all-capital acronyms are spelled as Nepali letter names (for example,
-`API` becomes `ए पी आई`). For ordinary English words, use the pronunciation
+Before Nepali synthesis, numbers, dates (Bikram Sambat and Gregorian), clock times, percentages and
+phone numbers are converted to Nepali words (see [Nepali in VoiceStudio](../nepali.md)); this happens
+for every engine when the language is Nepali. This engine additionally spells short all-capital
+acronyms as Nepali letter names (for example, `API` becomes `ए पी आई`), because the Hindi tokenizer
+cannot read Latin capitals. For ordinary English words, use the pronunciation
 dictionary or an inline override when a specific Nepali pronunciation is needed;
 automatic transliteration is intentionally not guessed because English spelling is
 not phonetic.
@@ -52,7 +54,10 @@ international prefix is spoken as `प्लस नौ सात सात`.
 Select **XTTS v2 Nepali** in the Engines panel (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>E</kbd>),
 or set `OMNIVOICE_TTS_BACKEND=xtts-nepali`. Choose Nepali, or leave the language on Auto
 (Auto defaults to Nepali), and pick a voice to clone. A clean reference clip of 6 s or longer
-clones best. Without a clip, the engine uses a built-in XTTS speaker.
+clones best. Without a clip, the engine uses a built-in XTTS speaker. XTTS clones from the audio
+alone, so VoiceStudio does not transcribe the reference clip for this engine. The **By design** tab's
+voice description is not supported: XTTS needs a reference voice. The request seed is honoured, so
+the same seed and text reproduce the same take.
 
 ## Settings
 
@@ -78,9 +83,12 @@ clones best. Without a clip, the engine uses a built-in XTTS speaker.
   error rate as the old `hi` / 0.7 / 10.0 settings. Natural speech is about 4.95.
 - The reference clip matters most for tone: XTTS copies the reference's delivery. Use 10–15 s of
   relaxed, conversational Nepali speech, not a short or read-aloud clip.
-- Digits are not expanded to Nepali words. Write numbers as words.
-- Text within the tokenizer's character limit (150 characters for `hi`) is rendered in one pass.
-  Longer text is split at the danda (`।`), at `?`, `!` and `.`, with a 0.2 s gap between pieces.
+- Text is split into sentences at the danda (`।`, `॥`), `?`, `!` and `.`, with a 0.2 s gap between
+  pieces. A period after a Nepali abbreviation (`रु.`, `डा.`, `नं.`, `वि.सं.`) does not end a sentence.
+  A sentence longer than the model's token limit is split at word boundaries, and a single over-long
+  word at syllable boundaries (a conjunct or vowel sign is never cut off).
+- English words inside Nepali text are left as written (English spelling is not phonetic). Use the
+  pronunciation dictionary to give a word a Nepali spelling.
 - Pitch is flatter than natural speech (see the model card).
 - CPU is slow. On an i7-9700, a warm engine took about 50–80 s to render 10.5 s of audio
   (5–8× real time). The first generate adds roughly 30 s to load the model.

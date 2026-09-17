@@ -50,6 +50,7 @@ import struct
 import sys
 import threading
 import traceback
+import unicodedata
 from collections import OrderedDict
 
 # Coqui's XTTS loader uses torchaudio to read reference clips. Newer
@@ -65,6 +66,8 @@ MAX_FRAME_BYTES = 64 * 1024 * 1024
 XTTS_SAMPLE_RATE = 24_000
 
 _REPO_ID = "Oshara/xtts-v2-nepali"
+#: Reviewed immutable revision; kept equal to services/hf_revisions.py (tested).
+_REVISION = "1ef72e4a13e201409a895ef45c36b38adbe324d8"
 _CHECKPOINT = os.environ.get("OMNIVOICE_XTTS_NEPALI_CHECKPOINT", "epoch-20").strip()
 _NE_ROUTE = os.environ.get("OMNIVOICE_XTTS_NEPALI_ROUTE", "hi").strip().lower()
 
@@ -99,144 +102,53 @@ _LANG_ALIASES = {
 
 _ZERO_WIDTH_RE = re.compile("[​‌‍⁠﻿]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[।॥?!])\s*|(?<=\.)\s+")
-
-_NE_NUMBER_WORDS = (
-    "शून्य", "एक", "दुई", "तीन", "चार", "पाँच", "छ", "सात", "आठ", "नौ",
-    "दश", "एघार", "बाह्र", "तेह्र", "चौध", "पन्ध्र", "सोह्र", "सत्र", "अठार",
-    "उन्नाइस",
-)
-_NE_TENS = (
-    "", "", "बीस", "तीस", "चालीस", "पचास", "साठी", "सत्तरी", "असी", "नब्बे",
-)
-_NE_20_TO_99 = {
-    21: "एक्काइस", 22: "बाइस", 23: "तेइस", 24: "चौबीस", 25: "पच्चीस",
-    26: "छब्बीस", 27: "सत्ताइस", 28: "अठ्ठाइस", 29: "उनन्तीस",
-    31: "एकतीस", 32: "बत्तीस", 33: "तेत्तीस", 34: "चौँतीस", 35: "पैँतीस",
-    36: "छत्तीस", 37: "सैँतीस", 38: "अठतीस", 39: "उनन्चालीस",
-    41: "एकचालीस", 42: "बयालीस", 43: "त्रिचालीस", 44: "चवालीस", 45: "पैँतालीस",
-    46: "छयालीस", 47: "सतचालीस", 48: "अठचालीस", 49: "उनन्चास",
-    51: "एकाउन्न", 52: "बाउन्न", 53: "त्रिपन्न", 54: "चउन्न", 55: "पचपन्न",
-    56: "छपन्न", 57: "सन्ताउन्न", 58: "अन्ठाउन्न", 59: "उनन्साठी",
-    61: "एकसट्ठी", 62: "बयसट्ठी", 63: "त्रिसट्ठी", 64: "चौंसट्ठी", 65: "पैंसट्ठी",
-    66: "छयसट्ठी", 67: "सतसट्ठी", 68: "अठसट्ठी", 69: "उनन्सत्तरी",
-    71: "एकहत्तर", 72: "बहत्तर", 73: "त्रिहत्तर", 74: "चौहत्तर", 75: "पचहत्तर",
-    76: "छयहत्तर", 77: "सतहत्तर", 78: "अठहत्तर", 79: "उनासी",
-    81: "एकासी", 82: "बयासी", 83: "त्रियासी", 84: "चौरासी", 85: "पचासी",
-    86: "छयासी", 87: "सतासी", 88: "अठासी", 89: "उनान्नब्बे",
-    91: "एकान्नब्बे", 92: "बयानब्बे", 93: "त्रियान्नब्बे", 94: "चौरान्नब्बे",
-    95: "पन्चानब्बे", 96: "छयान्नब्बे", 97: "सन्तानब्बे", 98: "अन्ठान्नब्बे",
-    99: "उनान्सय",
-}
-_NE_MONTHS = {
-    1: "जनवरी", 2: "फेब्रुअरी", 3: "मार्च", 4: "अप्रिल", 5: "मे", 6: "जुन",
-    7: "जुलाई", 8: "अगस्ट", 9: "सेप्टेम्बर", 10: "अक्टोबर", 11: "नोभेम्बर",
-    12: "डिसेम्बर",
-}
-_NE_ACRONYM_LETTERS = {
-    "A": "ए", "B": "बी", "C": "सी", "D": "डी", "E": "ई", "F": "एफ",
-    "G": "जी", "H": "एच", "I": "आई", "J": "जे", "K": "के", "L": "एल",
-    "M": "एम", "N": "एन", "O": "ओ", "P": "पी", "Q": "क्यू", "R": "आर",
-    "S": "एस", "T": "टी", "U": "यू", "V": "भी", "W": "डब्ल्यू", "X": "एक्स",
-    "Y": "वाई", "Z": "जेड",
-}
-_DATE_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b")
-_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
-# Nepal phone formats: +977 international numbers, 98/97/96 mobile numbers,
-# and the common 01 Kathmandu landline prefix. Match before dates/integers so
-# a phone is never read as one large cardinal number.
-_PHONE_RE = re.compile(
-    r"(?<!\w)(?:\+977(?:[\s-]?\d){10}|(?:98|97|96)(?:[\s-]?\d){8}|"
-    r"01(?:[\s-]?\d){6,7})(?!\w)"
-)
-_DECIMAL_RE = re.compile(r"\b\d+[.,]\d+\b")
-_INTEGER_RE = re.compile(r"\b\d+\b")
-_ACRONYM_RE = re.compile(r"\b[A-Z]{2,8}\b")
-
-_MODEL = None
-_voice_cache: OrderedDict[str, tuple] = OrderedDict()
+# Nepali abbreviations written with a period (rupees, doctor, number, Bikram /
+# Gregorian era, Mr./Mrs.). A period after one of these is not a sentence end,
+# so the sentence must not be split (and paused) there.
+_NE_ABBREVIATIONS = frozenset({"रु", "डा", "नं", "वि", "सं", "ई", "प्रा", "श्री", "सुश्री", "पं"})
 
 
-def _ne_under_hundred(value: int) -> str:
-    if value < 20:
-        return _NE_NUMBER_WORDS[value]
-    if value in _NE_20_TO_99:
-        return _NE_20_TO_99[value]
-    return _NE_TENS[value // 10] + (f" {_NE_NUMBER_WORDS[value % 10]}" if value % 10 else "")
+def _ends_with_abbreviation(sentence: str) -> bool:
+    if not sentence.endswith("."):
+        return False
+    words = re.split(r"[\s.]+", sentence.rstrip(". "))
+    return words[-1] in _NE_ABBREVIATIONS
 
 
-def _ne_number(value: int) -> str:
-    """Render common cardinal numbers in Nepali words without dependencies."""
-    if value < 100:
-        return _ne_under_hundred(value)
-    if value < 1000:
-        rest = value % 100
-        return f"{_NE_NUMBER_WORDS[value // 100]} सय" + (
-            f" {_ne_under_hundred(rest)}" if rest else ""
-        )
-    if value < 100000:
-        rest = value % 1000
-        return f"{_ne_under_hundred(value // 1000)} हजार" + (
-            f" {_ne_number(rest)}" if rest else ""
-        )
-    if value < 10000000:
-        rest = value % 100000
-        return f"{_ne_number(value // 100000)} लाख" + (
-            f" {_ne_number(rest)}" if rest else ""
-        )
-    rest = value % 10000000
-    return f"{_ne_number(value // 10000000)} करोड" + (
-        f" {_ne_number(rest)}" if rest else ""
-    )
+def _sentences(text: str) -> list[str]:
+    """Split on danda / ? / ! / period, re-joining splits after abbreviations."""
+    out: list[str] = []
+    for piece in _SENTENCE_SPLIT_RE.split(text):
+        if out and _ends_with_abbreviation(out[-1]):
+            out[-1] = f"{out[-1]} {piece}"
+        else:
+            out.append(piece)
+    return out
+
+def _load_nepali_text():
+    """The shared stdlib-only Nepali normalizer (backend/services/nepali_text.py),
+    loaded by path: this sidecar runs in its own venv without the app package."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "services", "nepali_text.py")
+    spec = importlib.util.spec_from_file_location("voicestudio_nepali_text", os.path.normpath(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _ne_digits(value: str) -> str:
-    return " ".join(_NE_NUMBER_WORDS[int(d)] for d in value)
+_nepali = _load_nepali_text()
+_ne_number = _nepali.number_words
 
 
 def _normalize_nepali_text(text: str) -> str:
-    """Make numeric and acronym tokens speakable on the Hindi XTTS route."""
-    def phone(match: re.Match[str]) -> str:
-        raw = match.group(0)
-        digits = re.sub(r"\D", "", raw)
-        prefix = "प्लस " if raw.lstrip().startswith("+") else ""
-        return prefix + _ne_digits(digits)
+    """Numbers/dates/times as Nepali words, then Latin acronyms spelled out:
+    the Hindi route's tokenizer can read neither digits nor Latin capitals."""
+    return _nepali.spell_acronyms(_nepali.normalize_numbers(text))
 
-    def iso_date(match: re.Match[str]) -> str:
-        year, month, day = (int(group) for group in match.groups())
-        month_name = _NE_MONTHS.get(month)
-        if not month_name or not 1 <= day <= 31:
-            return match.group(0)
-        return f"{_ne_number(day)} {month_name} {_ne_number(year)}"
 
-    def slash_date(match: re.Match[str]) -> str:
-        day, month, year = (int(group) for group in match.groups())
-        if year < 100:
-            year += 2000
-        month_name = _NE_MONTHS.get(month)
-        if not month_name or not 1 <= day <= 31:
-            return match.group(0)
-        return f"{_ne_number(day)} {month_name} {_ne_number(year)}"
-
-    def decimal(match: re.Match[str]) -> str:
-        whole, fraction = re.split(r"[.,]", match.group(0), maxsplit=1)
-        return f"{_ne_number(int(whole))} दशमलव {_ne_digits(fraction)}"
-
-    def integer(match: re.Match[str]) -> str:
-        raw = match.group(0)
-        if len(raw) > 8:
-            return _ne_digits(raw)
-        return _ne_number(int(raw))
-
-    text = _PHONE_RE.sub(phone, text)
-    text = _ISO_DATE_RE.sub(iso_date, text)
-    text = _DATE_RE.sub(slash_date, text)
-    text = _DECIMAL_RE.sub(decimal, text)
-    text = _INTEGER_RE.sub(integer, text)
-
-    def acronym(match: re.Match[str]) -> str:
-        return " ".join(_NE_ACRONYM_LETTERS[ch] for ch in match.group(0))
-
-    return _ACRONYM_RE.sub(acronym, text)
+_MODEL = None
+_voice_cache: OrderedDict[str, tuple] = OrderedDict()
 
 
 # -- wire protocol -----------------------------------------------------------
@@ -360,7 +272,9 @@ def _load_model(stdout):
         if not model_dir:
             from huggingface_hub import snapshot_download  # noqa: PLC0415
 
-            root = snapshot_download(_REPO_ID, allow_patterns=[f"{_CHECKPOINT}/*"])
+            root = snapshot_download(
+                _REPO_ID, revision=_REVISION, allow_patterns=[f"{_CHECKPOINT}/*"]
+            )
             model_dir = os.path.join(root, _CHECKPOINT)
 
         config = XttsConfig()
@@ -398,6 +312,16 @@ def _xtts_language(raw, supported) -> str:
     )
 
 
+def _file_digest(path: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _voice_latents(model, ref_audio):
     """(gpt_cond_latent, speaker_embedding) for a local reference clip, or for a
     built-in speaker when no clip is given. LRU-cached per file contents."""
@@ -406,8 +330,10 @@ def _voice_latents(model, ref_audio):
             raise ValueError(
                 "ref_audio must be a local file path; URLs are not accepted (local-first)."
             )
-        st = os.stat(ref_audio)
-        key = f"{ref_audio}|m{st.st_mtime_ns}s{st.st_size}"
+        # Keyed by content, not path: an ad-hoc clone re-uploads the same clip
+        # on every generate and the parent writes it to a new temp file each
+        # time, so a path key recomputed the conditioning latents per request.
+        key = _file_digest(ref_audio)
         cached = _voice_cache.get(key)
         if cached is not None:
             _voice_cache.move_to_end(key)
@@ -428,11 +354,28 @@ def _voice_latents(model, ref_audio):
     return entry["gpt_cond_latent"], entry["speaker_embedding"]
 
 
+_VIRAMA_JOINERS = frozenset("\u094d\u200c\u200d")
+
+
+def _clusters(word: str) -> list[str]:
+    """Split a word into written syllables: a base character plus its combining
+    marks, with virama/ZWJ joining the next consonant (conjuncts stay whole)."""
+    out: list[str] = []
+    for char in word:
+        if out and (
+            unicodedata.category(char) in ("Mn", "Mc") or out[-1][-1] in _VIRAMA_JOINERS
+        ):
+            out[-1] += char
+        else:
+            out.append(char)
+    return out
+
+
 def _chunks(text: str, tokenizer, language: str, token_limit: int) -> list[str]:
     """Split text without exceeding XTTS's token limit or dropping text."""
     text = re.sub(r"\s+", " ", _ZERO_WIDTH_RE.sub("", text)).strip()
     out: list[str] = []
-    for sent in _SENTENCE_SPLIT_RE.split(text):
+    for sent in _sentences(text):
         sent = sent.strip()
         if not sent:
             continue
@@ -452,11 +395,11 @@ def _chunks(text: str, tokenizer, language: str, token_limit: int) -> list[str]:
             # A single unusually long token must still be split rather than
             # discarded or sent to XTTS beyond its hard assertion.
             fragment = ""
-            for char in word:
-                candidate = fragment + char
+            for cluster in _clusters(word):
+                candidate = fragment + cluster
                 if fragment and len(tokenizer.encode(candidate, lang=language)) >= token_limit:
                     out.append(fragment.strip())
-                    fragment = char
+                    fragment = cluster
                 else:
                     fragment = candidate
             if fragment.strip():

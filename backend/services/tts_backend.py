@@ -242,6 +242,15 @@ class TTSBackend(ABC):
     #: so this is a discoverability hint, not an enforcement gate.
     supports_emotion: bool = False
 
+    #: Whether generate() uses ``ref_text`` (the reference clip's transcript).
+    #: Engines that clone from audio alone (XTTS) or do not clone set False, so
+    #: /generate skips the ASR pass that would otherwise transcribe the clip.
+    uses_ref_text: bool = True
+
+    #: Whether generate() honours a ``seed`` kwarg (sidecars that seed their own
+    #: RNG); the parent's torch.manual_seed cannot reach another process.
+    accepts_seed: bool = False
+
     def ensure_ready(self) -> None:
         """Load model weights now (blocking), so callers can separate the
         LOAD budget from the GENERATE budget (#1033/#1037 class).
@@ -2390,6 +2399,8 @@ _INSTALL_HINTS: dict[str, str] = {
     "dots-tts":      "git clone rednote-hilab/dots.tts + set OMNIVOICE_DOTS_TTS_DIR  (own venv, transformers==4.57; 2B, ~9 GB weights; CUDA/CPU, Linux/macOS only — no Windows; Apache-2.0)",
     "confucius4-tts":"git clone netease-youdao/Confucius4-TTS + set OMNIVOICE_CONFUCIUS4_TTS_DIR  (own Python 3.10 venv; 14-lang cross-lingual zero-shot clone; ~5 GB weights auto-download; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
     "audiocpp":     "download the matching audio.cpp v0.7.2 prebuilt + set OMNIVOICE_AUDIOCPP_BIN, then explicitly install Breeze-TTS-2 in the engine's Weights list in Model Catalogue  (native CPU/Vulkan/CUDA/Metal GGUF server, no Python; en+zh clone+design; ~4.73 GiB; weights research/non-commercial only)",
+    "xtts-nepali":  "create ~/.omnivoice/engines/xtts-nepali/.venv with coqui-tts==0.27.5 + transformers==4.57.6 (see docs/engines/xtts-nepali.md) or set OMNIVOICE_XTTS_NEPALI_DIR  (own venv; Oshara XTTS v2 Nepali fine-tune, ~1.9 GB weights on first use; CUDA/CPU; CPML non-commercial weights)",
+    "indic-parler-tts": "create ~/.omnivoice/engines/indic-parler/.venv with parler-tts (see docs/engines/indic-parler-tts.md) or set OMNIVOICE_INDIC_PARLER_DIR  (own venv; 21 Indic langs incl. Nepali, voice by description; HF-gated ~3.8 GB weights, set HF_TOKEN; CUDA/CPU; Apache-2.0)",
 }
 
 
@@ -2833,11 +2844,21 @@ def reset_active_backend() -> None:
     _active_instance_id = None
     _active_mlx_model_key = None
     if inst is not None:
+        _drop_cached_instance(inst)
         try:
             inst.unload()
         except Exception as exc:  # noqa: BLE001
             logger.warning("reset_active_backend: %s.unload() raised: %s",
                            type(inst).__name__, exc)
+
+
+def _drop_cached_instance(inst) -> None:
+    """Remove ``inst`` from the shared engine cache (if it is the cached one),
+    so the next lookup builds a fresh instance instead of reusing an unloaded
+    one."""
+    with _ENGINE_CACHE_LOCK:
+        if _ENGINE_INSTANCES.get(type(inst)) is inst:
+            _ENGINE_INSTANCES.pop(type(inst), None)
 
 
 def get_active_tts_backend(*, model=None) -> TTSBackend:
@@ -2875,6 +2896,7 @@ def get_active_tts_backend(*, model=None) -> TTSBackend:
         or (bid == "mlx-audio" and mlx_model_key != _active_mlx_model_key)
     )
     if switching:
+        _drop_cached_instance(_active_instance)
         try:
             _active_instance.unload()
         except Exception as exc:  # noqa: BLE001
@@ -2892,7 +2914,13 @@ def get_active_tts_backend(*, model=None) -> TTSBackend:
         return OmniVoiceBackend(model=model)
 
     if _active_instance is None or _active_instance_id != bid:
-        _active_instance = OmniVoiceBackend(model=model) if cls is OmniVoiceBackend else cls()
+        # Non-OmniVoice engines share the per-class cache /generate uses, so
+        # dub, convert and the OpenAI route never hold a second copy of the
+        # same engine next to it.
+        _active_instance = (
+            OmniVoiceBackend(model=model) if cls is OmniVoiceBackend
+            else get_engine_instance(cls)
+        )
         _active_instance_id = bid
         _active_mlx_model_key = mlx_model_key
     return _active_instance

@@ -18,12 +18,11 @@ The model is gated on Hugging Face (accept its terms, then set a token); the
 """
 from __future__ import annotations
 
-import math
 import os
 import sys
 from pathlib import Path
 
-from services.subprocess_backend import SubprocessBackend
+from services.subprocess_backend import SubprocessBackend, recv_timeout_from_env
 
 _DIR_ENV_VAR = "OMNIVOICE_INDIC_PARLER_DIR"
 
@@ -36,6 +35,13 @@ class IndicParlerBackend(SubprocessBackend):
     _DEFAULT_SAMPLE_RATE = 44_100
     gpu_compat: tuple[str, ...] = ("cuda", "cpu")
     supports_cloning = False
+    # The voice comes from a text description (the request's ``instruct``).
+    supports_voice_design = True
+    uses_ref_text = False
+    accepts_seed = True
+    # Language the UI selects instead of "Auto" while this engine is active; the
+    # default voice description is the Nepali speaker "Amrita".
+    default_language = "ne"
 
     @classmethod
     def venv_python(cls) -> Path:
@@ -60,11 +66,7 @@ class IndicParlerBackend(SubprocessBackend):
     @property
     def recv_timeout_s(self) -> float:
         # The sidecar heartbeats through download, load and each sentence.
-        try:
-            v = float(os.environ.get("OMNIVOICE_INDIC_PARLER_RECV_TIMEOUT_S", "600"))
-        except (TypeError, ValueError):
-            return 600.0
-        return max(30.0, v) if math.isfinite(v) else 600.0
+        return recv_timeout_from_env("OMNIVOICE_INDIC_PARLER_RECV_TIMEOUT_S", 600.0)
 
     @property
     def sample_rate(self) -> int:

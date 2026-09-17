@@ -454,3 +454,27 @@ def test_free_vram_survives_a_torch_without_the_private_api(monkeypatch):
     mm.free_vram()
 
     assert calls == ["empty_cache"]
+
+
+def test_active_backend_shares_the_engine_instance_cache(monkeypatch):
+    """dub/convert/openai (get_active_tts_backend) and /generate
+    (get_engine_instance) must hold ONE instance per engine, not two copies."""
+    calls = {"unload": 0}
+    fake = _fake_backend(calls)
+    tb._REGISTRY["fake-mm2"] = fake
+    tb.reset_active_backend()
+    try:
+        monkeypatch.setattr(tb, "active_backend_id", lambda: "fake-mm2")
+        active = tb.get_active_tts_backend()
+        assert active is tb.get_engine_instance(tb.get_backend_class("fake-mm2"))
+
+        # A switch unloads it AND drops it from the shared cache, so nothing
+        # keeps handing out the unloaded instance.
+        monkeypatch.setattr(tb, "active_backend_id", lambda: "omnivoice")
+        tb.get_active_tts_backend()
+        assert calls["unload"] == 1
+        assert tb._ENGINE_INSTANCES.get(tb.get_backend_class("fake-mm2")) is not active
+    finally:
+        tb.reset_active_backend()
+        tb._ENGINE_INSTANCES.pop(tb.get_backend_class("fake-mm2"), None)
+        tb._REGISTRY.pop("fake-mm2", None)

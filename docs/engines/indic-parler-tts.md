@@ -23,13 +23,16 @@ uv pip install --python "$D/.venv/bin/python" git+https://github.com/huggingface
 On Windows, the interpreter is at `.venv\Scripts\python.exe`.
 
 The model is gated. Accept its terms on the model page, then give VoiceStudio a Hugging Face
-token (Settings → API Keys, `HF_TOKEN`, or `hf auth login`). The ~3.8 GB download happens on
-the first generate.
+token (Settings → API Keys, `HF_TOKEN`, or `hf auth login`). The ~3.8 GB weights are listed in
+**Model Catalogue** and pinned to a reviewed revision; if not installed they download on the first
+generate.
 
 ## Use
 
 Select **Indic Parler-TTS** in the Engines panel (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>E</kbd>), or set
-`OMNIVOICE_TTS_BACKEND=indic-parler-tts`. Write the text in Devanagari.
+`OMNIVOICE_TTS_BACKEND=indic-parler-tts`. Write the text in Devanagari. While this engine is
+active the language picker defaults to Nepali, and numbers, dates and times are spoken as Nepali
+words (see [Nepali in VoiceStudio](../nepali.md)). The request seed is honoured.
 
 The voice description is the request's instruction (the **By design** tab). With no description,
 the engine uses the recommended Nepali speaker:
