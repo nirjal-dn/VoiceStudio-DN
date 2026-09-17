@@ -60,6 +60,11 @@ vi.mock('../../utils/errorToast', () => ({
   toastErrorWithReport: (...args) => toastErrorWithReport(...args),
 }));
 
+const browserDownload = vi.fn();
+vi.mock('../../utils/download', () => ({
+  browserDownload: (...args) => browserDownload(...args),
+}));
+
 // The panel only needs the busy-error class from the generate API surface —
 // mock the module so the test doesn't drag the real client/store chain in.
 vi.mock('../../api/generate', () => ({
@@ -233,6 +238,14 @@ describe('ConvertMethodPanel', () => {
 
     expect(screen.getByTestId('waveform-output').textContent).toContain('/audio/take0001.wav');
     expect(screen.getByText(/hello there/)).toBeInTheDocument();
+    expect(screen.getByText('convert.saved_to_history')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('convert-download'));
+    await waitFor(() =>
+      expect(browserDownload).toHaveBeenCalledWith(
+        expect.stringContaining('/audio/take0001.wav'),
+        'take0001.wav',
+      ),
+    );
   });
 
   it('sends match_duration=0 when the toggle is off', async () => {

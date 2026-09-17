@@ -141,6 +141,13 @@ _NE_ACRONYM_LETTERS = {
 }
 _DATE_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b")
 _ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+# Nepal phone formats: +977 international numbers, 98/97/96 mobile numbers,
+# and the common 01 Kathmandu landline prefix. Match before dates/integers so
+# a phone is never read as one large cardinal number.
+_PHONE_RE = re.compile(
+    r"(?<!\w)(?:\+977(?:[\s-]?\d){10}|(?:98|97|96)(?:[\s-]?\d){8}|"
+    r"01(?:[\s-]?\d){6,7})(?!\w)"
+)
 _DECIMAL_RE = re.compile(r"\b\d+[.,]\d+\b")
 _INTEGER_RE = re.compile(r"\b\d+\b")
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,8}\b")
@@ -188,6 +195,12 @@ def _ne_digits(value: str) -> str:
 
 def _normalize_nepali_text(text: str) -> str:
     """Make numeric and acronym tokens speakable on the Hindi XTTS route."""
+    def phone(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        digits = re.sub(r"\D", "", raw)
+        prefix = "प्लस " if raw.lstrip().startswith("+") else ""
+        return prefix + _ne_digits(digits)
+
     def iso_date(match: re.Match[str]) -> str:
         year, month, day = (int(group) for group in match.groups())
         month_name = _NE_MONTHS.get(month)
@@ -214,6 +227,7 @@ def _normalize_nepali_text(text: str) -> str:
             return _ne_digits(raw)
         return _ne_number(int(raw))
 
+    text = _PHONE_RE.sub(phone, text)
     text = _ISO_DATE_RE.sub(iso_date, text)
     text = _DATE_RE.sub(slash_date, text)
     text = _DECIMAL_RE.sub(decimal, text)

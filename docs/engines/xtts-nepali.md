@@ -42,6 +42,11 @@ dictionary or an inline override when a specific Nepali pronunciation is needed;
 automatic transliteration is intentionally not guessed because English spelling is
 not phonetic.
 
+Nepal phone numbers are read digit-by-digit. Supported forms include local mobile
+numbers (`9801234567`, `9801 234 567`, `980-123-4567`), international numbers
+(`+977 9801234567`), and common Kathmandu landlines (`01-4XXXXXX`). The
+international prefix is spoken as `प्लस नौ सात सात`.
+
 ## Use
 
 Select **XTTS v2 Nepali** in the Engines panel (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>E</kbd>),

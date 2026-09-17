@@ -49,11 +49,24 @@ _BLANK_ID = 256
 _FRAME_S = 0.08
 #: A pause this long starts a new segment.
 _SEGMENT_GAP_S = 0.8
+_REQUIRED_ASSETS = (
+    "preprocessor.ts",
+    "encoder.onnx",
+    "ctc_decoder.onnx",
+    "vocab.json",
+    "language_masks.json",
+)
 
 _runtime = None
 _runtime_lock = threading.Lock()
 #: One transcription at a time: each holds several hundred MB of activations.
 _infer_lock = threading.Lock()
+
+
+def _missing_assets(root: str) -> list[str]:
+    assets = os.path.join(root, "assets")
+    return [name for name in _REQUIRED_ASSETS
+            if not os.path.isfile(os.path.join(assets, name))]
 
 
 def _language() -> str:
@@ -170,6 +183,33 @@ def _load() -> _Runtime:
                             "token (Settings -> API Keys, HF_TOKEN, or `hf auth login`)."
                         ) from exc
                     raise
+            missing = _missing_assets(root)
+            if missing:
+                logger.warning(
+                    "IndicConformer snapshot is incomplete at %s; missing %s. "
+                    "Repairing the model snapshot.",
+                    root,
+                    ", ".join(f"assets/{name}" for name in missing),
+                )
+                try:
+                    root = snapshot_download(
+                        REPO_ID,
+                        revision=REVISION,
+                        force_download=True,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"IndicConformer model snapshot is incomplete; missing "
+                        f"{', '.join(f'assets/{name}' for name in missing)}. "
+                        "Retry the model download from Settings -> Model Catalogue "
+                        "after accepting the Hugging Face model terms."
+                    ) from exc
+                missing = _missing_assets(root)
+                if missing:
+                    raise RuntimeError(
+                        "IndicConformer model download completed but required assets "
+                        f"are still missing: {', '.join(f'assets/{name}' for name in missing)}."
+                    )
             logger.info("loading IndicConformer from %s", root)
             _runtime = _Runtime(root)
         return _runtime

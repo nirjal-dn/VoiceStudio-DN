@@ -8,6 +8,7 @@ import {
   Fingerprint,
   Timer,
   Info,
+  Download,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Button } from '../../ui';
@@ -17,6 +18,7 @@ import { TtsGenerationBusyError } from '../../api/generate';
 import { asrMissingPayload, toastAsrModelMissing } from '../../utils/asrModelMissing';
 import { modelNotDownloadedPayload, toastModelNotDownloaded } from '../../utils/modelNotDownloaded';
 import { toastErrorWithReport } from '../../utils/errorToast';
+import { browserDownload } from '../../utils/download';
 import useRecording from '../../hooks/useRecording';
 import MicButton from './MicButton';
 import VoiceSelector from '../VoiceSelector';
@@ -301,6 +303,34 @@ export default function ConvertMethodPanel({ t, profiles = [], onRecordingBusyCh
               height={40}
               autoPlay
             />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="history-action-btn accent inline-flex items-center gap-1.5"
+                data-testid="convert-download"
+                onClick={async () => {
+                  try {
+                    const filename = result.audio_url?.split('/').pop() || 'voice-conversion.wav';
+                    await browserDownload(`${API}${result.audio_url}`, filename);
+                  } catch (error) {
+                    toastErrorWithReport(
+                      t('tts_errors.error_prefix', {
+                        message: error?.message || String(error),
+                      }),
+                      error,
+                    );
+                  }
+                }}
+              >
+                <Download size={13} aria-hidden="true" />
+                {t('convert.download', { defaultValue: 'Download audio' })}
+              </button>
+              <span className="text-xs text-fg-muted">
+                {t('convert.saved_to_history', {
+                  defaultValue: 'Saved to history',
+                })}
+              </span>
+            </div>
             <div className="mt-2 text-[0.78rem] text-fg-muted">
               <span className="font-medium">{t('convert.transcript')}:</span> {result.text}
             </div>

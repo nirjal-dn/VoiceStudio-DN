@@ -117,3 +117,14 @@ def test_registered_as_lazy_asr_backend():
 
     assert asr_backend._REGISTRY["indic-conformer"] is ic.IndicConformerBackend
     assert "indic-conformer" in asr_backend._INSTALL_HINTS
+
+
+def test_model_snapshot_requires_runtime_assets(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    for name in ("encoder.onnx", "vocab.json"):
+        (assets / name).touch()
+
+    missing = ic._missing_assets(str(tmp_path))
+
+    assert missing == ["preprocessor.ts", "ctc_decoder.onnx", "language_masks.json"]
