@@ -1228,15 +1228,29 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     recording is one block of text, not a timestamped list. (Consumers that need
     per-utterance timings, e.g. dubbing, use the plain faster-whisper engine.)
 
+    A forced ``ne`` decode biases the decoder toward Devanagari, so it tends to
+    *transliterate* embedded English ("account" → "अकाउन्ट"). To counter that
+    without fine-tuning, decoding is primed with an ``initial_prompt`` that mixes
+    Nepali (Devanagari) and English (Latin) in one sentence: Whisper mimics the
+    prompt's script convention and keeps English words in Latin. This is a
+    heuristic nudge, not a guarantee — the robust fix is fine-tuning on
+    code-switched audio whose labels keep English in Latin (see
+    ``scripts/finetune_whisper_ne_en.py``).
+
     Overrides via env: ``OMNIVOICE_CS_LANGUAGE`` (default ``ne``, set ``en`` to
     pin English), ``OMNIVOICE_CS_BEAM_SIZE`` (default ``5``),
-    ``OMNIVOICE_CS_ASR_MODEL`` (default the inherited faster-whisper large-v3).
+    ``OMNIVOICE_CS_ASR_MODEL`` (default the inherited faster-whisper large-v3),
+    ``OMNIVOICE_CS_PROMPT`` (the mixed-script priming text; set empty to disable).
     """
 
     id = "whisper-ne-en"
     display_name = "Whisper large-v3 — Nepali+English code-switch (single-pass)"
     # Fast enough to be a dictation/capture engine when pinned.
     serves_capture = True
+
+    #: Default decoder priming: Nepali in Devanagari with English words in Latin,
+    #: so Whisper keeps embedded English in Latin instead of transliterating it.
+    _DEFAULT_PROMPT = "मैले office को email मा reply गरें। Client सँग meeting भयो।"
 
     def __init__(self):
         super().__init__()
@@ -1248,6 +1262,10 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             self._beam_size = int(os.environ.get("OMNIVOICE_CS_BEAM_SIZE", "5"))
         except (TypeError, ValueError):
             self._beam_size = 5
+        # Mixed-script prompt keeps English in Latin (env can override or, when
+        # set to an empty string, disable priming entirely).
+        prompt = os.environ.get("OMNIVOICE_CS_PROMPT")
+        self._initial_prompt = (self._DEFAULT_PROMPT if prompt is None else prompt).strip() or None
 
     def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
         self._ensure_model()
@@ -1266,6 +1284,7 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             vad_filter=True,             # built-in Silero VAD — drop non-speech
             vad_parameters=dict(min_silence_duration_ms=500),
             condition_on_previous_text=False,
+            initial_prompt=self._initial_prompt,  # keep embedded English in Latin
             word_timestamps=word_timestamps,
         )
         result = self._shape_result(segments_iter, info, word_timestamps)

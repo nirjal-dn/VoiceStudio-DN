@@ -106,6 +106,23 @@ def test_beam_size_env_override(monkeypatch):
     assert bk._model.transcribe_kwargs["best_of"] == 1
 
 
+def test_initial_prompt_primes_mixed_script_by_default(monkeypatch):
+    monkeypatch.delenv("OMNIVOICE_CS_PROMPT", raising=False)
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    prompt = bk._model.transcribe_kwargs["initial_prompt"]
+    # Nudges English → Latin: the prompt carries Latin words inside Devanagari.
+    assert prompt and "email" in prompt
+    assert any("ऀ" <= ch <= "ॿ" for ch in prompt)  # also has Devanagari
+
+
+def test_initial_prompt_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_PROMPT", "")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["initial_prompt"] is None
+
+
 def test_beam_size_env_invalid_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("OMNIVOICE_CS_BEAM_SIZE", "not-a-number")
     bk = _backend_with("नमस्ते")

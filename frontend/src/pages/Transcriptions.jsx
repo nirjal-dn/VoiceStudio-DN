@@ -414,6 +414,10 @@ export default function TranscriptionsPage() {
         onDrop={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          // The whole box is the drop zone — not just the small label. Dropping
+          // a file onto the hint area used to be silently swallowed here.
+          const file = event.dataTransfer.files?.[0];
+          if (file && !uploading) void handleAudioUpload(file);
         }}
       >
         <input

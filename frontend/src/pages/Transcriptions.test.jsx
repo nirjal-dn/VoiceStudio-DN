@@ -124,8 +124,11 @@ describe('Transcriptions capture entry point', () => {
       file,
       expect.objectContaining({ mode: 'accurate', language: '' }),
     );
-    expect(await screen.findByText('Uploaded audio transcript.')).toBeInTheDocument();
-    expect(screen.getByText('2.5s')).toBeInTheDocument();
+    // The redesigned workspace shows the transcript in both the list and the
+    // detail panel, so assert at least one match rather than a unique one.
+    expect((await screen.findAllByText('Uploaded audio transcript.')).length).toBeGreaterThan(0);
+    // Segment timing renders as a range ("0.0s – 2.5s") in the redesigned panel.
+    expect(screen.getByText(/2\.5s/)).toBeInTheDocument();
   });
 
   it('handles dropped audio inside the transcription panel without bubbling', async () => {
@@ -146,6 +149,23 @@ describe('Transcriptions capture entry point', () => {
     await waitFor(() => expect(transcribeAudio).toHaveBeenCalledWith(file, expect.anything()));
     expect(globalDrop).not.toHaveBeenCalled();
     window.removeEventListener('drop', globalDrop);
+  });
+
+  it('transcribes a file dropped anywhere on the upload box, not just the label', async () => {
+    transcribeAudio.mockResolvedValue({
+      text: 'Dropped on the box.',
+      language: 'en',
+      segments: [],
+    });
+    render(<TranscriptionsPage />);
+    const file = new File(['audio'], 'boxdrop.wav', { type: 'audio/wav' });
+
+    // Drop on the section area (the hint region), which previously swallowed it.
+    fireEvent.drop(screen.getByRole('region', { name: 'Audio transcription' }), {
+      dataTransfer: { files: [file] },
+    });
+
+    await waitFor(() => expect(transcribeAudio).toHaveBeenCalledWith(file, expect.anything()));
   });
 
   it('shows a transcript written by another window (desktop dictation pill)', async () => {
