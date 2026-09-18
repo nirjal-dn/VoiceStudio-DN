@@ -102,30 +102,50 @@ describe('Transcriptions capture entry point', () => {
       addTranscription({ text: 'The shared capture path works.', language: 'en' });
     });
 
-    it('uploads an audio clip, saves the complete transcript, and selects it', async () => {
-      transcribeAudio.mockResolvedValue({
-        text: 'Uploaded audio transcript.',
-        language: 'en',
-        duration_s: 12.4,
-        segments: [{ start: 0, end: 2.5, text: 'Uploaded audio transcript.' }],
-        engine: 'whisper',
-      });
-      render(<TranscriptionsPage />);
-      const file = new File(['audio'], 'meeting.wav', { type: 'audio/wav' });
-      fireEvent.change(screen.getByLabelText('Upload audio'), {
-        target: { files: [file] },
-      });
+    expect(await screen.findByText('The shared capture path works.')).toBeInTheDocument();
+  });
 
-      await waitFor(() => expect(transcribeAudio).toHaveBeenCalled());
-      expect(transcribeAudio).toHaveBeenCalledWith(
-        file,
-        expect.objectContaining({ mode: 'accurate', language: '' }),
-      );
-      expect(await screen.findByText('Uploaded audio transcript.')).toBeInTheDocument();
-      expect(screen.getByText('2.5s')).toBeInTheDocument();
+  it('uploads an audio clip, saves the complete transcript, and selects it', async () => {
+    transcribeAudio.mockResolvedValue({
+      text: 'Uploaded audio transcript.',
+      language: 'en',
+      duration_s: 12.4,
+      segments: [{ start: 0, end: 2.5, text: 'Uploaded audio transcript.' }],
+      engine: 'whisper',
+    });
+    render(<TranscriptionsPage />);
+    const file = new File(['audio'], 'meeting.wav', { type: 'audio/wav' });
+    fireEvent.change(screen.getByLabelText('Choose or drop audio'), {
+      target: { files: [file] },
     });
 
-    expect(await screen.findByText('The shared capture path works.')).toBeInTheDocument();
+    await waitFor(() => expect(transcribeAudio).toHaveBeenCalled());
+    expect(transcribeAudio).toHaveBeenCalledWith(
+      file,
+      expect.objectContaining({ mode: 'accurate', language: '' }),
+    );
+    expect(await screen.findByText('Uploaded audio transcript.')).toBeInTheDocument();
+    expect(screen.getByText('2.5s')).toBeInTheDocument();
+  });
+
+  it('handles dropped audio inside the transcription panel without bubbling', async () => {
+    transcribeAudio.mockResolvedValue({
+      text: 'Dropped audio transcript.',
+      language: 'en',
+      segments: [],
+    });
+    const globalDrop = vi.fn();
+    window.addEventListener('drop', globalDrop);
+    render(<TranscriptionsPage />);
+    const file = new File(['audio'], 'dropped.webm', { type: 'audio/webm' });
+
+    fireEvent.drop(screen.getByLabelText('Choose or drop audio'), {
+      dataTransfer: { files: [file] },
+    });
+
+    await waitFor(() => expect(transcribeAudio).toHaveBeenCalledWith(file, expect.anything()));
+    expect(globalDrop).not.toHaveBeenCalled();
+    window.removeEventListener('drop', globalDrop);
   });
 
   it('shows a transcript written by another window (desktop dictation pill)', async () => {
