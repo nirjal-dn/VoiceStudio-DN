@@ -53,6 +53,8 @@ approval), [Windows](../install/windows.md), [Linux](../install/linux.md),
 |---|---|---|---|---|
 | WhisperX | [whisperx](whisperx.md) | CUDA · CPU | dubbing (word timestamps + diarization) | installed by default |
 | Faster-Whisper | [faster-whisper](faster-whisper.md) | CUDA · CPU | general transcription | installed by default |
+| Whisper Nepali+English code-switch | [whisper-ne-en](whisper-ne-en.md) | CUDA · CPU | mixed Nepali/English in one sentence (single-pass) | installed by default (reuses faster-whisper) |
+| Nepali + English (Auto) | [ne-en-router](ne-en-router.md) | CUDA · CPU | per-segment routing — Nepali→IndicConformer, English→Whisper large-v2 | Whisper large-v2 (~3 GB) + IndicConformer (~2.4 GB, gated) |
 | Faster-Whisper (isolated) | [faster-whisper-isolated](faster-whisper-isolated.md) | CUDA · CPU | unattended batches | opt-in pick |
 | MLX Whisper | [mlx-whisper](mlx-whisper.md) | Apple Silicon | Mac default | `pip install mlx-whisper` |
 | PyTorch Whisper | [pytorch-whisper](pytorch-whisper.md) | CUDA · MPS · CPU | ROCm hosts | installed by default |

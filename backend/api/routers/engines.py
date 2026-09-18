@@ -657,7 +657,7 @@ def select_engine(req: SelectEngineRequest):
     # that supported compatibility id directly.
     rows = (
         module.list_backends(include_hidden=True)
-        if req.family == "tts"
+        if req.family in ("tts", "asr")
         else module.list_backends()
     )
     backend_id = (

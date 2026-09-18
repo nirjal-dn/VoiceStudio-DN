@@ -1131,15 +1131,29 @@ class FasterWhisperBackend(ASRBackend):
             word_timestamps=word_timestamps,
             vad_filter=True,  # built-in Silero VAD — cleaner segment starts
         )
+        return self._shape_result(segments_iter, info, word_timestamps)
+
+    @staticmethod
+    def _shape_result(segments_iter, info, word_timestamps: bool) -> dict:
+        """Normalise a faster-whisper (segments, info) pair to the shape
+        ``segment_transcript(...)`` expects: a dict with ``chunks`` (mlx-output
+        compat) plus ``segments`` + ``language`` metadata. Shared by
+        :class:`FasterWhisperBackend` and its code-switch subclass so both emit
+        byte-identical shapes."""
+        # Materialise the generator so downstream consumers can index / re-iterate.
         segments = list(segments_iter)
-        # Normalise to the shape segment_transcript(...) expects: a dict with
-        # `chunks` (for backwards compat with mlx output) AND `segments` +
-        # `language` (so callers that peek at language metadata keep working).
         chunks = [
             {"text": seg.text, "timestamp": (seg.start, seg.end)}
             for seg in segments
         ]
-        out = {
+        # ONE complete transcript across the whole clip — Whisper's time-based
+        # (VAD) segments are joined in order, so a code-switched result reads as
+        # a single mixed Devanagari+Latin string, never split by language/script.
+        full_text = " ".join(
+            seg.text.strip() for seg in segments if (seg.text or "").strip()
+        ).strip()
+        return {
+            "text": full_text,
             "chunks": chunks,
             "segments": [
                 {
@@ -1166,7 +1180,6 @@ class FasterWhisperBackend(ASRBackend):
             "language_probability": info.language_probability,
             "duration": info.duration,
         }
-        return out
 
     def unload(self) -> None:
         # #memory: this cleared self._asr — an attribute FasterWhisperBackend
@@ -1183,6 +1196,102 @@ class FasterWhisperBackend(ASRBackend):
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+
+# ── Nepali ↔ English code-switch (Whisper large-v3, faster-whisper) ──────────
+
+
+class CodeSwitchWhisperBackend(FasterWhisperBackend):
+    """Whisper large-v3 for Nepali↔English code-switched speech.
+
+    Implements the validated notebook recipe (``STT_openai_Whisper``): force
+    ``language="ne"`` and ``task="transcribe"``, so Nepali stays in Devanagari
+    and embedded English stays in Latin without the decoder drifting to Hindi.
+    Decoding never *detects* the language — a forced ``ne`` decode is the safe
+    choice for every input this engine targets:
+
+    * pure Nepali        → Devanagari.
+    * Nepali+English mix  → Nepali in Devanagari, English words kept in Latin.
+    * pure English        → still transcribed in Latin (a ``ne`` decode does not
+      hurt clean English audio).
+
+    Inherits model loading, device/OOM fallback, and result shaping from
+    :class:`FasterWhisperBackend`. Decoding is deterministic
+    (``temperature=0.0``, beam search) with faster-whisper's built-in Silero VAD
+    (``min_silence_duration_ms=500``) and ``condition_on_previous_text=False`` so
+    one window's bias never bleeds into the next.
+
+    This is a **dictation** engine, so it returns the whole recording as **one
+    continuous transcript in a single segment** spanning start→stop. Whisper's
+    VAD still splits speech into per-utterance segments internally (that is how
+    it drops silence), but they are merged back before returning — a dictated
+    recording is one block of text, not a timestamped list. (Consumers that need
+    per-utterance timings, e.g. dubbing, use the plain faster-whisper engine.)
+
+    Overrides via env: ``OMNIVOICE_CS_LANGUAGE`` (default ``ne``, set ``en`` to
+    pin English), ``OMNIVOICE_CS_BEAM_SIZE`` (default ``5``),
+    ``OMNIVOICE_CS_ASR_MODEL`` (default the inherited faster-whisper large-v3).
+    """
+
+    id = "whisper-ne-en"
+    display_name = "Whisper large-v3 — Nepali+English code-switch (single-pass)"
+    # Fast enough to be a dictation/capture engine when pinned.
+    serves_capture = True
+
+    def __init__(self):
+        super().__init__()
+        # Pinned to Nepali (the notebook forces "ne"); overridable for a
+        # different target language.
+        self._language = os.environ.get("OMNIVOICE_CS_LANGUAGE", "ne").strip().lower()
+        self._model_name = os.environ.get("OMNIVOICE_CS_ASR_MODEL", self._model_name)
+        try:
+            self._beam_size = int(os.environ.get("OMNIVOICE_CS_BEAM_SIZE", "5"))
+        except (TypeError, ValueError):
+            self._beam_size = 5
+
+    def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
+        self._ensure_model()
+        logger.info(
+            "code-switch transcribing %s as %s (beam=%d, word_timestamps=%s)",
+            audio_path, self._language, self._beam_size, word_timestamps,
+        )
+        # faster-whisper decodes the file itself via PyAV (no ffmpeg CLI needed).
+        segments_iter, info = self._model.transcribe(
+            audio_path,
+            language=self._language,     # forced ne — never detect, never Hindi
+            task="transcribe",           # never translate
+            beam_size=self._beam_size,
+            best_of=self._beam_size,
+            temperature=0.0,             # deterministic decoding
+            vad_filter=True,             # built-in Silero VAD — drop non-speech
+            vad_parameters=dict(min_silence_duration_ms=500),
+            condition_on_previous_text=False,
+            word_timestamps=word_timestamps,
+        )
+        result = self._shape_result(segments_iter, info, word_timestamps)
+        return self._collapse_to_single_segment(result)
+
+    @staticmethod
+    def _collapse_to_single_segment(result: dict) -> dict:
+        """Merge Whisper's per-utterance VAD segments into ONE segment spanning
+        the whole recording, so a dictated recording is a single continuous
+        transcript from start to stop rather than a timestamped list.
+
+        ``text`` (already the space-joined full transcript) is unchanged; the
+        single segment/chunk carries it with the recording's start/end and every
+        word timing concatenated in order."""
+        segments = result.get("segments") or []
+        if len(segments) <= 1:
+            return result
+        full_text = result.get("text", "")
+        start = segments[0].get("start", 0.0) or 0.0
+        end = segments[-1].get("end")
+        words = [w for seg in segments for w in (seg.get("words") or [])]
+        result["segments"] = [
+            {"text": full_text, "start": start, "end": end, "words": words}
+        ]
+        result["chunks"] = [{"text": full_text, "timestamp": (start, end)}]
+        return result
 
 
 # ── MLX Whisper (Apple Silicon optional) ────────────────────────────────────
@@ -2453,6 +2562,423 @@ def _indic_conformer():
     return IndicConformerBackend
 
 
+def _fresh_capture_whisper() -> "ASRBackend":
+    """A hardware-appropriate *Whisper* backend for the auto-language router.
+
+    Whisper specifically (not Parakeet/sherpa) because the router needs
+    Whisper's native language detection to decide Nepali vs English. Mirrors
+    the whisper tier of :func:`get_capture_asr_backend` (MLX Turbo → faster-
+    whisper → pytorch), but builds a FRESH, uncached instance that is never the
+    router itself — so :meth:`AutoLangASRBackend.transcribe` can call it without
+    recursing back into the pinned router.
+    """
+    if MLXWhisperBackend.is_available()[0]:
+        return MLXWhisperBackend(model_name=_MLX_MODEL_TURBO)
+    if FasterWhisperBackend.is_available()[0]:
+        return FasterWhisperBackend()
+    return PyTorchWhisperBackend()
+
+
+class AutoLangASRBackend(ASRBackend):
+    """Auto-routes each recording to the best ASR engine for its language.
+
+    Whisper transcribes once (it detects the spoken language for free); when
+    the detected language is one IndicConformer serves better — Nepali by
+    default — the same audio is re-run through IndicConformer and that
+    Devanagari-native result is returned instead. English (and every non-Indic
+    language) keeps Whisper's result in a single pass, so only the Nepali path
+    pays for a second transcription.
+
+    Pin this engine (Settings → ASR, or ``OMNIVOICE_ASR_BACKEND=auto-lang``) to
+    dictate Nepali and English in the same conversation without switching
+    engines by hand — each recording is detected and routed independently.
+
+    ``whole_recording`` because IndicConformer only transcribes a complete
+    recording (no streaming partials): the session collects audio and
+    transcribes once when the user stops, exactly like a pinned IndicConformer.
+    """
+
+    id = "auto-lang"
+    display_name = "Automatic (Nepali → IndicConformer, else Whisper)"
+    # cuda/mps via the Whisper tier; IndicConformer is CPU. cpu always works.
+    gpu_compat = ("cuda", "mps", "cpu")
+    serves_capture = True
+    whole_recording = True
+
+    #: Whisper-detected language codes (ISO-639-1) that route to IndicConformer.
+    #: Nepali by default; override for another Indic language IndicConformer
+    #: serves (it covers 22) via a comma list, e.g. "ne,hi,mr".
+    _INDIC_LANGS = frozenset(
+        s.strip().lower()
+        for s in os.environ.get("OMNIVOICE_AUTO_ASR_INDIC_LANGS", "ne").split(",")
+        if s.strip()
+    )
+
+    def __init__(self):
+        # ponytail: both sub-backends kept warm for low-latency switching;
+        # on a memory-tight host set OMNIVOICE_ASR_BACKEND back to a single
+        # engine, or unload between sessions — per-language eviction is the
+        # upgrade path if two warm ASR models prove too heavy.
+        self._whisper: "ASRBackend | None" = None
+        self._indic: "ASRBackend | None" = None
+
+    @classmethod
+    def is_available(cls) -> tuple[bool, str]:
+        # The English path (Whisper) is the floor — IndicConformer is a Nepali
+        # quality upgrade that stays optional (routing degrades to Whisper).
+        for b in (WhisperXBackend, FasterWhisperBackend,
+                  MLXWhisperBackend, PyTorchWhisperBackend):
+            try:
+                if b.is_available()[0]:
+                    return True, "ready"
+            except Exception:  # noqa: BLE001 — a broken probe must not gate the rest
+                continue
+        return False, "no Whisper ASR backend available for the English path"
+
+    def _whisper_backend(self) -> "ASRBackend":
+        if self._whisper is None:
+            self._whisper = _fresh_capture_whisper()
+        return self._whisper
+
+    def _indic_backend(self) -> "ASRBackend":
+        if self._indic is None:
+            self._indic = _indic_conformer()()
+        return self._indic
+
+    def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
+        result = self._whisper_backend().transcribe(
+            audio_path, word_timestamps=word_timestamps,
+        )
+        lang = (result.get("language") or "").strip().lower()
+        if lang in self._INDIC_LANGS:
+            indic_cls = _indic_conformer()
+            try:
+                if indic_cls.is_available()[0]:
+                    indic = self._indic_backend().transcribe(
+                        audio_path, word_timestamps=word_timestamps,
+                    )
+                    # Keep the detected code if IndicConformer reported none.
+                    indic.setdefault("language", lang)
+                    return indic
+            except Exception as e:  # noqa: BLE001 — never fail the whole transcribe
+                logger.warning(
+                    "auto-lang: IndicConformer failed for detected %r (%s) — "
+                    "keeping the Whisper transcription", lang, e,
+                )
+        return result
+
+    def unload(self) -> None:
+        for b in (self._whisper, self._indic):
+            if b is not None:
+                try:
+                    b.unload()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._whisper = None
+        self._indic = None
+
+
+# ── Per-segment Nepali↔English router (VAD → LID → route → merge) ────────────
+
+
+class NeEnRouterASRBackend(ASRBackend):
+    """Per-segment Nepali↔English router: the "Nepali + English (Auto)" mode.
+
+    Unlike the whole-recording :class:`AutoLangASRBackend` (one model per
+    recording) and the single-pass :class:`CodeSwitchWhisperBackend` (one forced
+    decode), this splits a recording into speech segments and routes **each
+    segment** to the model that transcribes its language best, then merges the
+    pieces back in chronological order:
+
+    ::
+
+        Audio → VAD/segmentation → per-segment ne/en LID (+ hysteresis)
+              → ne → IndicConformer (Devanagari) / en → Whisper large-v2 (Latin)
+              → timestamp merge → one transcript
+
+    Stages, all inside one ``transcribe()`` so it plugs into the existing ASR
+    architecture (registry entry, ``segment_transcript``-shaped output):
+
+    1. **VAD / segmentation + English ASR** — Whisper large-v2 transcribes the
+       whole clip once with its built-in Silero VAD, giving speech segments with
+       word timings *and* the English (Latin) transcript for free. This reuses
+       the existing VAD rather than a second segmenter.
+    2. **Language ID** — each segment's audio is classified with the Whisper
+       encoder's language head, but **constrained to just {ne, en}** (all other
+       languages are dropped and the two are renormalised), so speech is never
+       routed anywhere else. Segments give the classifier 2–15 s of acoustic
+       context, far more reliable than word-level windows.
+    3. **Hysteresis** — a segment only *flips* the running language when its
+       constrained confidence clears ``OMNIVOICE_NEEN_LID_MARGIN`` (default
+       0.60); an uncertain segment inherits the previous language. This stops the
+       router flapping ne↔en on low-confidence predictions.
+    4. **Route** — consecutive same-language segments are coalesced into spans;
+       each span is transcribed once by its model (en spans reuse Whisper's
+       already-decoded text; ne spans re-run IndicConformer on that slice).
+    5. **Merge** — spans are sorted by start time and joined into one transcript,
+       each output segment tagged with its ``language`` and the model used.
+
+    Degrades safely: if IndicConformer is unavailable or errors on a span, that
+    span keeps Whisper's transcription — a recording is never lost. Availability
+    only requires faster-whisper (the English/segmentation/LID path).
+
+    Env overrides: ``OMNIVOICE_NEEN_WHISPER_MODEL`` (default the CTranslate2
+    ``large-v2`` repo), ``OMNIVOICE_NEEN_LID_MARGIN`` (switch threshold).
+    """
+
+    id = "ne-en-router"
+    display_name = "Nepali + English (Auto)"
+    # Whisper tier runs on cuda/cpu; IndicConformer is CPU. cpu always works.
+    gpu_compat = ("cuda", "cpu")
+    serves_capture = True
+    # IndicConformer only transcribes a whole recording (no streaming partials),
+    # so the router transcribes once on stop, like a pinned IndicConformer.
+    whole_recording = True
+
+    #: Whisper model for the English path + segmentation + LID. The user-facing
+    #: contract is Whisper large-v2; override to reuse an already-downloaded
+    #: model (e.g. the large-v3 the other engines use) and avoid a 2nd download.
+    _EN_MODEL = os.environ.get(
+        "OMNIVOICE_NEEN_WHISPER_MODEL", "Systran/faster-whisper-large-v2"
+    )
+    #: Minimum constrained ne/en confidence needed to switch languages between
+    #: consecutive segments (hysteresis). Below it, keep the running language.
+    try:
+        _LID_MARGIN = float(os.environ.get("OMNIVOICE_NEEN_LID_MARGIN", "0.60"))
+    except (TypeError, ValueError):
+        _LID_MARGIN = 0.60
+
+    _SR = 16000  # the decode/VAD/LID sample rate
+
+    def __init__(self):
+        self._whisper: "FasterWhisperBackend | None" = None
+        self._indic: "ASRBackend | None" = None
+
+    @classmethod
+    def is_available(cls) -> tuple[bool, str]:
+        # faster-whisper is the floor: it segments (Silero VAD), transcribes
+        # English, and provides the LID. IndicConformer is a Nepali quality
+        # upgrade that stays optional (ne spans degrade to Whisper).
+        ok, msg = FasterWhisperBackend.is_available()
+        if ok:
+            return True, "ready"
+        return False, f"needs faster-whisper for the English/segmentation path: {msg}"
+
+    # ── lazily-warmed delegates ─────────────────────────────────────────────
+    def _whisper_model(self):
+        """The underlying faster-whisper ``WhisperModel`` (large-v2), reused for
+        the whole-clip English pass AND per-segment language detection."""
+        if self._whisper is None:
+            w = FasterWhisperBackend()
+            w._model_name = self._EN_MODEL
+            w._ensure_model()
+            self._whisper = w
+        return self._whisper._model
+
+    def _indic_backend(self) -> "ASRBackend":
+        if self._indic is None:
+            self._indic = _indic_conformer()()
+        return self._indic
+
+    # ── stage 2: constrained ne/en language ID ──────────────────────────────
+    def _detect_lang(self, audio_slice) -> tuple[str, float]:
+        """Classify a segment's audio as ``ne`` or ``en`` using the Whisper
+        encoder's language head, **restricted to those two** (all other
+        languages dropped, the pair renormalised). Returns ``(lang, confidence)``
+        where confidence is the winner's share of ne+en.
+
+        Detection only — the returned generator is never iterated, so no decode
+        runs. Robust to faster-whisper versions: reads the public
+        ``info.all_language_probs`` populated when ``language=None``.
+        """
+        wm = self._whisper_model()
+        try:
+            _seg, info = wm.transcribe(
+                audio_slice, language=None, task="transcribe",
+                vad_filter=False, without_timestamps=True, beam_size=1,
+            )
+            probs = dict(
+                getattr(info, "all_language_probs", None)
+                or [(info.language, info.language_probability)]
+            )
+        except Exception as e:  # noqa: BLE001 — a broken probe must not lose audio
+            logger.warning("ne-en-router: LID failed (%s) — defaulting to English", e)
+            return "en", 0.0
+        ne = float(probs.get("ne", 0.0))
+        en = float(probs.get("en", 0.0))
+        total = ne + en
+        if total <= 0.0:
+            return "en", 0.0
+        return ("ne", ne / total) if ne >= en else ("en", en / total)
+
+    # ── stage 3: hysteresis (avoid flapping on uncertain segments) ──────────
+    @staticmethod
+    def _apply_hysteresis(pairs, margin: float) -> list[str]:
+        """Turn raw per-segment ``(lang, conf)`` predictions into a stable
+        language sequence: only switch when a *different* language clears
+        ``margin``; otherwise inherit the running language. Pure — unit-tested."""
+        out: list[str] = []
+        current: str | None = None
+        for lang, conf in pairs:
+            if current is None or (lang != current and conf >= margin):
+                current = lang
+            out.append(current)
+        return out
+
+    def _route_languages(self, audio, wsegs) -> list[tuple[str, float]]:
+        raw = []
+        for s in wsegs:
+            a = int(max(0.0, s.start) * self._SR)
+            b = int(max(s.end, s.start + 0.1) * self._SR)
+            raw.append(self._detect_lang(audio[a:b]))
+        langs = self._apply_hysteresis(raw, self._LID_MARGIN)
+        return list(zip(langs, [conf for _, conf in raw]))
+
+    # ── stage 4: coalesce consecutive same-language segments into spans ──────
+    @staticmethod
+    def _coalesce(wsegs, routed) -> list[dict]:
+        spans: list[dict] = []
+        for i, (s, (lang, conf)) in enumerate(zip(wsegs, routed)):
+            if spans and spans[-1]["lang"] == lang:
+                spans[-1]["end"] = s.end
+                spans[-1]["conf"] = max(spans[-1]["conf"], conf)
+                spans[-1]["idx"].append(i)
+            else:
+                spans.append({"start": s.start, "end": s.end, "lang": lang,
+                              "conf": conf, "idx": [i]})
+        return spans
+
+    @staticmethod
+    def _whisper_span(wsegs, span, word_timestamps: bool) -> tuple[str, list]:
+        texts, words = [], []
+        for i in span["idx"]:
+            seg = wsegs[i]
+            if (seg.text or "").strip():
+                texts.append(seg.text.strip())
+            if word_timestamps:
+                for w in (seg.words or []):
+                    words.append({"text": w.word, "start": w.start, "end": w.end})
+        return " ".join(texts), words
+
+    def _indic_span(self, audio, span, word_timestamps: bool) -> tuple[str, list]:
+        """Transcribe a Nepali span with IndicConformer by slicing its audio to a
+        temp wav (IndicConformer reads a path). Word/segment timings are shifted
+        back onto the whole-clip timeline."""
+        import os as _os
+        import tempfile
+
+        import soundfile as sf
+
+        a = int(max(0.0, span["start"]) * self._SR)
+        b = int(max(span["end"], span["start"] + 0.1) * self._SR)
+        fd, path = tempfile.mkstemp(suffix=".wav", prefix="ne_en_router_")
+        _os.close(fd)
+        try:
+            sf.write(path, audio[a:b], self._SR)
+            res = self._indic_backend().transcribe(path, word_timestamps=word_timestamps)
+        finally:
+            try:
+                _os.remove(path)
+            except OSError:
+                pass
+        segs = res.get("segments") or []
+        text = (res.get("text") or " ".join(s.get("text", "") for s in segs)).strip()
+        words = []
+        if word_timestamps:
+            for seg in segs:
+                for w in (seg.get("words") or []):
+                    words.append({
+                        "text": w.get("text") or w.get("word", ""),
+                        "start": float(w.get("start") or 0.0) + span["start"],
+                        "end": float(w.get("end") or 0.0) + span["start"],
+                    })
+        return text, words
+
+    def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
+        import numpy as np  # noqa: F401 — kept for slice typing clarity
+
+        audio = _decode_audio_16k_mono(audio_path)  # 16 kHz mono float32
+        wm = self._whisper_model()
+        logger.info(
+            "ne-en-router transcribing %s via %s (word_timestamps=%s)",
+            audio_path, self._EN_MODEL, word_timestamps,
+        )
+        # Stage 1: Whisper large-v2 = VAD/segmentation + the English transcript.
+        # Forced language="en" so English spans read as clean Latin; Nepali spans
+        # are re-transcribed by IndicConformer below (their Whisper text is only a
+        # fallback if IndicConformer is unavailable).
+        seg_iter, _info = wm.transcribe(
+            audio,
+            language="en",
+            task="transcribe",
+            beam_size=5,
+            temperature=0.0,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+            condition_on_previous_text=False,
+            word_timestamps=word_timestamps,
+        )
+        wsegs = list(seg_iter)
+        if not wsegs:
+            return {"text": "", "segments": [], "chunks": [], "language": "en"}
+
+        # Stages 2–3: per-segment ne/en LID + hysteresis.
+        routed = self._route_languages(audio, wsegs)
+        # Stage 4: coalesce into spans, transcribe each with its routed model.
+        indic_ok = _indic_conformer().is_available()[0]
+        out_segments: list[dict] = []
+        for span in self._coalesce(wsegs, routed):
+            lang = span["lang"]
+            if lang == "ne" and indic_ok:
+                try:
+                    text, words = self._indic_span(audio, span, word_timestamps)
+                    model = "IndicConformer"
+                except Exception as e:  # noqa: BLE001 — never lose the span
+                    logger.warning(
+                        "ne-en-router: IndicConformer failed on span %.2f–%.2fs "
+                        "(%s) — keeping Whisper text", span["start"], span["end"], e,
+                    )
+                    text, words = self._whisper_span(wsegs, span, word_timestamps)
+                    lang, model = "en", "Whisper large-v2 (indic fallback)"
+            else:
+                text, words = self._whisper_span(wsegs, span, word_timestamps)
+                model = "Whisper large-v2"
+                if lang == "ne":
+                    model += " (IndicConformer unavailable)"
+            logger.info(
+                "ne-en-router [%.2f–%.2fs] lang=%s (p=%.2f) → %s: %r",
+                span["start"], span["end"], lang, span["conf"], model, text[:60],
+            )
+            if text.strip():
+                out_segments.append({
+                    "text": text.strip(), "start": span["start"],
+                    "end": span["end"], "words": words, "language": lang,
+                })
+
+        # Stage 5: merge in chronological order into one transcript.
+        out_segments.sort(key=lambda s: s["start"])
+        full_text = " ".join(s["text"] for s in out_segments).strip()
+        return {
+            "text": full_text,
+            "segments": out_segments,
+            "chunks": [
+                {"text": s["text"], "timestamp": (s["start"], s["end"])}
+                for s in out_segments
+            ],
+            "language": "ne-en",
+        }
+
+    def unload(self) -> None:
+        for b in (self._whisper, self._indic):
+            if b is not None:
+                try:
+                    b.unload()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._whisper = None
+        self._indic = None
+
+
 class _LazyASRRegistry(dict):
     """Registry with lazily-resolved entries (Wave 4.2). Mirrors the TTS
     registry's lazy pattern so listing/selecting the crash-isolated ASR
@@ -2506,6 +3032,9 @@ _REGISTRY: dict[str, type[ASRBackend]] = _LazyASRRegistry({
     "funasr":          FunASRBackend,
     "sherpa-onnx-asr": SherpaDictationBackend,
     "openai-compat-asr": OpenAICompatASRBackend,
+    "auto-lang":       AutoLangASRBackend,
+    "whisper-ne-en":   CodeSwitchWhisperBackend,
+    "ne-en-router":    NeEnRouterASRBackend,
     # "faster-whisper-isolated": resolved lazily (crash-isolated subprocess).
 })
 
@@ -2547,6 +3076,28 @@ _INSTALL_HINTS: dict[str, str] = {
         "transcribes: runs ASR in a separate process that can be force-killed "
         "to reclaim a hung transcribe and its VRAM (#730). Slightly slower per "
         "call than in-process faster-whisper."
+    ),
+    "whisper-ne-en": (
+        "No extra install (reuses faster-whisper large-v3). Nepali↔English "
+        "code-switch dictation: transcribes mixed sentences in one pass with the "
+        "decode language forced to Nepali, keeping Nepali in Devanagari and "
+        "English in Latin so it is never mis-read as Hindi. Pin a different "
+        "language with OMNIVOICE_CS_LANGUAGE (default 'ne')."
+    ),
+    "auto-lang": (
+        "No extra install. Routes each recording by its detected language: "
+        "Nepali → IndicConformer (Devanagari-native), everything else → the "
+        "hardware's best Whisper. Pin it to dictate Nepali and English in one "
+        "session with no manual switching. Override the Indic set with "
+        "OMNIVOICE_AUTO_ASR_INDIC_LANGS (default 'ne')."
+    ),
+    "ne-en-router": (
+        "Downloads Whisper large-v2 (~3 GB) on first use, plus IndicConformer "
+        "(~2.4 GB, gated) for the Nepali path. Splits speech into segments, "
+        "detects Nepali vs English per segment, and routes each — Nepali → "
+        "IndicConformer, English → Whisper large-v2 — then merges by timestamp. "
+        "Reuse an existing Whisper with OMNIVOICE_NEEN_WHISPER_MODEL; tune the "
+        "switch threshold with OMNIVOICE_NEEN_LID_MARGIN (default 0.60)."
     ),
     "indic-conformer": (
         "No extra install (onnxruntime + torch). Downloads the gated "
@@ -2620,7 +3171,7 @@ def _deep_import_reason(cls: type["ASRBackend"], exc: ImportError) -> str:
     )
 
 
-def list_backends() -> list[dict]:
+def list_backends(*, include_hidden: bool = False) -> list[dict]:
     """Enumerate every ASR backend with the **same 11-key shape as TTS** so the
     Engine Compatibility Matrix renders all families uniformly.
 
@@ -2637,6 +3188,10 @@ def list_backends() -> list[dict]:
 
     out: list[dict] = []
     for bid, cls in _REGISTRY.items():
+        # The auto-lang router is not a user-pickable engine — it stays out of
+        # the selection menu but remains usable via OMNIVOICE_ASR_BACKEND=auto-lang.
+        if not include_hidden and bid == "auto-lang":
+            continue
         broken = _DEEP_IMPORT_BROKEN.get(bid)
         if broken is not None:
             # Loading this backend already proved a missing transitive module

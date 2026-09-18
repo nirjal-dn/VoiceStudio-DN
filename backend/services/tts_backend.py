@@ -2285,6 +2285,104 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 
+# Devanagari block (U+0900–U+097F): Nepali (and Hindi/Marathi/…) script. Used
+# by the auto-language TTS router to tell a Nepali line from an English one.
+# Escaped code points keep this source file pure-ASCII (no hardcoded script).
+_DEVANAGARI = re.compile("[\u0900-\u097f]")
+
+
+def _is_devanagari(text: str) -> bool:
+    """True when the text contains any Devanagari character.
+
+    Any presence (not a majority) routes to the Nepali engine: the XTTS Nepali
+    fine-tune already handles Devanagari-with-Latin mixed lines (see the mixed-
+    text normalisation in engines/xtts_nepali), whereas the default English
+    engine has no Devanagari phonemisation — so a mixed line is safer there.
+    """
+    return bool(_DEVANAGARI.search(text or ""))
+
+
+class AutoLangTTSBackend(TTSBackend):
+    """Auto-routes each synthesis to the best TTS engine for its script.
+
+    Devanagari text → the Nepali engine (Oshara/XTTS by default); everything
+    else → the default engine (VoiceStudio/OmniVoice). Routing is per-call, so
+    a batch or a conversation that mixes Nepali and English lines sends each
+    line to the right engine with no manual switching.
+
+    Pin this engine (Settings → Voice, or ``OMNIVOICE_TTS_BACKEND=auto-lang``).
+    The delegated engine ids are overridable via ``OMNIVOICE_AUTO_TTS_NEPALI``
+    and ``OMNIVOICE_AUTO_TTS_DEFAULT``.
+    """
+
+    id = "auto-lang"
+    display_name = "Automatic (Nepali → XTTS, else VoiceStudio)"
+    gpu_compat = ("cuda", "rocm", "mps", "cpu")
+    supports_cloning = True
+
+    _NEPALI_ID = os.environ.get("OMNIVOICE_AUTO_TTS_NEPALI", "xtts-nepali")
+    _DEFAULT_ID = os.environ.get("OMNIVOICE_AUTO_TTS_DEFAULT", "omnivoice")
+
+    def __init__(self, model=None):
+        # `model` is the shared OmniVoice singleton passed by
+        # get_active_tts_backend on the async streaming path — forwarded to the
+        # default (OmniVoice) delegate so it doesn't double-load.
+        self._model = model
+        # ponytail: both delegates kept warm for low-latency language switching
+        # (both output 24 kHz, so no resample seam). On a memory-tight host,
+        # pin a single engine instead — per-language eviction is the upgrade
+        # path if two warm TTS models prove too heavy.
+        self._subs: "dict[str, TTSBackend]" = {}
+        self._last: "TTSBackend | None" = None  # last delegate, for sample_rate
+
+    @classmethod
+    def is_available(cls) -> tuple[bool, str]:
+        # The default (English) engine is the floor; the Nepali engine is an
+        # optional add-on and routing degrades gracefully when it's absent.
+        try:
+            ok, msg = get_backend_class(cls._DEFAULT_ID).is_available()
+        except Exception as e:  # noqa: BLE001
+            return False, f"default engine {cls._DEFAULT_ID!r} unavailable: {e}"
+        return (True, "ready") if ok else (False, msg)
+
+    @property
+    def sample_rate(self) -> int:
+        return self._last.sample_rate if self._last is not None else 24000
+
+    @property
+    def supported_languages(self) -> list[str]:
+        return ["multi"]
+
+    def _sub(self, engine_id: str) -> "TTSBackend":
+        b = self._subs.get(engine_id)
+        if b is None:
+            cls = get_backend_class(engine_id)
+            b = cls(model=self._model) if cls is OmniVoiceBackend else cls()
+            self._subs[engine_id] = b
+        return b
+
+    def _route_id(self, text: str) -> str:
+        return self._NEPALI_ID if _is_devanagari(text) else self._DEFAULT_ID
+
+    def generate(self, text, **kw) -> "torch.Tensor":
+        b = self._sub(self._route_id(text))
+        self._last = b
+        return b.generate(text, **kw)
+
+    def ensure_ready(self) -> None:
+        # Warm the default engine; the Nepali engine loads on its first line.
+        self._sub(self._DEFAULT_ID).ensure_ready()
+
+    def unload(self) -> None:
+        for b in self._subs.values():
+            try:
+                b.unload()
+            except Exception:  # noqa: BLE001
+                pass
+        self._subs.clear()
+        self._last = None
+
+
 class _LazyRegistry(dict):
     """A dict that resolves selected keys via a deferred import.
 
@@ -2352,6 +2450,7 @@ _REGISTRY: dict[str, type[TTSBackend]] = _LazyRegistry({
     # "indextts2": resolved lazily via _LAZY_REGISTRY -> engines.indextts
     "gpt-sovits":    GPTSoVITSBackend,
     "sherpa-onnx":   SherpaOnnxBackend,
+    "auto-lang":     AutoLangTTSBackend,
 })
 
 # Compatibility names used by the standalone Oshara prototype and older
@@ -2450,6 +2549,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "audiocpp":             "docs/engines/audio-cpp.md",
     "xtts-nepali":          "docs/engines/xtts-nepali.md",
     "indic-parler-tts":     "docs/engines/indic-parler-tts.md",
+    "auto-lang":            "docs/engines/auto-lang.md",
 }
 
 
@@ -2569,6 +2669,10 @@ def list_backends(*, include_hidden: bool = False) -> list[dict]:
             and caps.family == "mps"
             and bid == "omnivoice-subprocess"
         ):
+            continue
+        # The auto-lang router is not a user-pickable engine — it stays out of
+        # the selection menu but remains usable via OMNIVOICE_TTS_BACKEND=auto-lang.
+        if not include_hidden and bid == "auto-lang":
             continue
         cls = _effective_backend_class(bid, cls, caps.family)
         try:
@@ -2907,11 +3011,12 @@ def get_active_tts_backend(*, model=None) -> TTSBackend:
         _active_mlx_model_key = None
 
     cls = get_backend_class(bid)
-    if cls is OmniVoiceBackend and model is not None:
+    if model is not None and cls in (OmniVoiceBackend, AutoLangTTSBackend):
         # Per-call view over the already-loaded shared singleton; don't cache it
         # (the model lifecycle is owned by model_manager), but the switch above
-        # already released any *different* previous engine.
-        return OmniVoiceBackend(model=model)
+        # already released any *different* previous engine. AutoLangTTSBackend
+        # forwards `model` to its OmniVoice delegate for the same reason.
+        return cls(model=model)
 
     if _active_instance is None or _active_instance_id != bid:
         # Non-OmniVoice engines share the per-class cache /generate uses, so

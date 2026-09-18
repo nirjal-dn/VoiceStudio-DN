@@ -380,11 +380,7 @@ def run_diagnostics(include_network: bool = True, deep: bool = False) -> dict:
         try:
             module = importlib.import_module(f"services.{family}_backend")
             active = module.active_backend_id()
-            rows = (
-                module.list_backends(include_hidden=True)
-                if family == "tts"
-                else module.list_backends()
-            )
+            rows = module.list_backends(include_hidden=True)
             row = next((item for item in rows if item.get("id") == active), None)
             if row is not None:
                 engine_execution.append({
