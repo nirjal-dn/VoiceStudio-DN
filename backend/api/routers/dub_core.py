@@ -2037,10 +2037,11 @@ async def dub_transcribe(job_id: str, num_speakers: Optional[int] = None):
                 # model's pipeline when explicitly preloaded.
                 audio_np, sr = sf.read(asr_audio_target, dtype="float32")
                 if audio_np.ndim > 1: audio_np = audio_np.mean(axis=1)
-                bs = 16 if torch.cuda.is_available() else 1
                 result = _model._asr_pipe(
                     {"array": audio_np, "sampling_rate": sr},
-                    return_timestamps=True, chunk_length_s=15, batch_size=bs,
+                    # Serialise chunks to keep Whisper activation memory
+                    # bounded on cards where the model itself fits.
+                    return_timestamps=True, chunk_length_s=15, batch_size=1,
                 )
                 detected_lang = (result.get("language") if isinstance(result, dict) else None)
         finally:

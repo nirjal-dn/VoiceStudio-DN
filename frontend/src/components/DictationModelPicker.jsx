@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Download, Loader } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
-import { apiJson } from '../api/client';
-import { useInstallModel } from '../api/hooks';
+import { apiJson, ApiError } from '../api/client';
+import { cancelInstallModel } from '../api/setup';
+import { queryKeys, useInstallModel } from '../api/hooks';
 import { useAppStore } from '../store';
 
 function fmtSize(sizeGb) {
@@ -37,7 +39,7 @@ export default function DictationModelPicker({ embedded = false }) {
   }, [dictationLoaded, loadPrefs]);
 
   const { data, refetch } = useQuery({
-    queryKey: ['dictation-models'],
+    queryKey: queryKeys.dictationModels,
     queryFn: () => apiJson('/dictation/models'),
     staleTime: 10_000,
     retry: false,
@@ -52,16 +54,38 @@ export default function DictationModelPicker({ embedded = false }) {
     ? modelId
     : (models.find((m) => m.recommended) || models[0]).id;
 
+  const waitForInstall = async (repoId) => {
+    const deadline = Date.now() + 15 * 60_000;
+    while (Date.now() < deadline) {
+      const result = await refetch();
+      const current = result.data?.models?.find((entry) => entry.repo_id === repoId);
+      if (current?.installed) return;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error(t('models.download_timeout', 'The model download timed out.'));
+  };
+
   const pick = async (model) => {
     if (model.id !== selectedId) setModelId(model.id);
     if (model.installed || installing.has(model.repo_id)) return;
     setInstalling((prev) => new Set(prev).add(model.repo_id));
     try {
-      await installMutation.mutateAsync(model.repo_id);
-      await refetch();
-    } catch {
-      // The install surface (Settings → Voice / Model Catalogue) reports the
-      // failure with full detail; here the row simply returns to "download".
+      try {
+        await installMutation.mutateAsync(model.repo_id);
+      } catch (error) {
+        // A previous failed job can leave the backend's short retry cooldown
+        // active. Clear that server-side guard and retry once, rather than
+        // leaving the picker stuck on an apparently downloadable model.
+        if (error instanceof ApiError && error.status === 429) {
+          await cancelInstallModel(model.repo_id);
+          await installMutation.mutateAsync(model.repo_id);
+        } else {
+          throw error;
+        }
+      }
+      await waitForInstall(model.repo_id);
+    } catch (error) {
+      toast.error(error?.message || t('models.install_failed', 'Model download failed.'));
     } finally {
       setInstalling((prev) => {
         const next = new Set(prev);

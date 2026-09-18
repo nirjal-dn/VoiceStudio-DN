@@ -113,3 +113,20 @@ def test_pytorch_asr_model_overridable_via_env(monkeypatch):
 
     ab.PyTorchWhisperBackend(asr_pipe=None)._ensure_pipe()
     assert captured["kw"]["model"] == "openai/whisper-small"
+
+
+def test_transcribe_uses_single_chunk_batch_to_bound_vram(tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    audio_path = tmp_path / "clip.wav"
+    sf.write(audio_path, np.zeros(16000, dtype=np.float32), 16000)
+    calls = {}
+
+    def fake_pipe(_audio, **kwargs):
+        calls.update(kwargs)
+        return {"text": "", "chunks": []}
+
+    ab.PyTorchWhisperBackend(asr_pipe=fake_pipe).transcribe(str(audio_path))
+
+    assert calls["batch_size"] == 1

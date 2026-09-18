@@ -123,14 +123,20 @@ export default function ModelCatalogue() {
 
         {/* Always mounted: ModelStoreTab owns the download-progress SSE state
             (progress, errors with Retry/Dismiss), which would be lost if a
-            family switch unmounted it mid-download. LLM merely hides it. */}
+            family switch unmounted it mid-download. Show engine-owned weights
+            here too, so every catalogue model has a direct download action;
+            LLM merely hides the family-specific list. */}
         <section
           data-testid="catalogue-weights"
-          aria-label={t('catalogue.other_weights')}
+          aria-label={t('catalogue.all_models', { defaultValue: 'All models' })}
           className="mt-[40px] min-w-0"
           hidden={!WEIGHT_FAMILIES.includes(family)}
         >
-          <ModelStoreTab family={family} title={t('catalogue.other_weights')} />
+          <ModelStoreTab
+            family={family}
+            ownedToo
+            title={t('catalogue.all_models', { defaultValue: 'All models' })}
+          />
         </section>
 
         <footer

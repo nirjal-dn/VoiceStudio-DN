@@ -87,8 +87,15 @@ const Button = forwardRef(function Button(
       aria-pressed={variant === 'chip' || variant === 'preset' ? active : undefined}
       {...rest}
     >
-      {loading ? <Loader size={variant === 'icon' ? 10 : 12} className="animate-spin" /> : leading}
-      {variant !== 'icon' && children != null && <span className="leading-none">{children}</span>}
+      {variant !== 'icon' && (loading || leading) && (
+        <span className="inline-flex h-4 items-center justify-center">
+          {loading ? <Loader size={12} className="animate-spin" /> : leading}
+        </span>
+      )}
+      {variant === 'icon' && loading && <Loader size={10} className="animate-spin" />}
+      {variant !== 'icon' && children != null && (
+        <span className="relative top-px inline-flex items-center leading-none">{children}</span>
+      )}
       {variant === 'icon' && children}
       {trailing}
     </ShadcnButton>

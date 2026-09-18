@@ -8,6 +8,7 @@ import EngineCompatibilityMatrix from '../EngineCompatibilityMatrix';
 import useModelDownloads from './models/useModelDownloads';
 import AsrOpenAICompatPanel from './AsrOpenAICompatPanel';
 import { SETTINGS_SECTION_SURFACE } from './primitives';
+import { installASREngine } from '../../api/engines';
 
 /** Model Catalogue: ONE section, one matrix, a TTS / ASR / LLM tab strip.
  *
@@ -92,6 +93,7 @@ export default function EnginesTab({
             onFamilyChange?.(next);
           }}
           reloadToken={configVersion}
+          apiInstallPackage={installASREngine}
           catalogueLayout={catalogueLayout}
         />
       </section>

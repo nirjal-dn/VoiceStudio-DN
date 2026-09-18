@@ -116,6 +116,51 @@ def list_llm_backends():
     return _family_payload("llm", llm_backend)
 
 
+@router.post(
+    "/engines/asr/{engine_id}/install",
+    dependencies=[Depends(require_admin)],
+)
+async def install_asr_engine(engine_id: str):
+    """Install a registry-supported ASR package into the backend environment.
+
+    Model weights remain a separate catalogue download, but the engine package
+    must be installed first for unavailable ASR rows to become selectable.
+    """
+    package = asr_backend.install_package_for(engine_id)
+    if package is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"ASR engine {engine_id!r} has no safe in-app installer. "
+                "Follow its installation guide instead."
+            ),
+        )
+    from services import translation_engines
+    if translation_engines.is_frozen():
+        raise HTTPException(
+            status_code=400,
+            detail="ASR engine installation is disabled in packaged builds.",
+        )
+    rc, output = await translation_engines.run_pip(["install", package], timeout=1800)
+    if rc != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Installing {package} failed ({rc}): {output[-1200:]}",
+        )
+    import importlib
+    importlib.invalidate_caches()
+    ok, reason = asr_backend._REGISTRY[engine_id].is_available()
+    return {
+        "status": "installed" if ok else "installed_but_probe_failed",
+        "engine": engine_id,
+        "package": package,
+        "available": bool(ok),
+        "reason": None if ok else reason,
+        "restart_required": not ok,
+        "log_tail": output[-1200:],
+    }
+
+
 @router.get("/engines/effects/presets", response_model=EffectPresetsResponse)
 def list_effects_presets():
     """Return available DSP effect presets for the dub pipeline.

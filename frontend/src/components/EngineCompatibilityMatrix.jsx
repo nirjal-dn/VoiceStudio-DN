@@ -78,6 +78,7 @@ export default function EngineCompatibilityMatrix({
   apiUnloadModel,
   apiInstallEngine,
   apiInstallStatus,
+  apiInstallPackage,
   apiGetDiskUsage,
 }) {
   const { t, i18n } = useTranslation();
@@ -93,6 +94,7 @@ export default function EngineCompatibilityMatrix({
     ...(apiUnloadModel && { apiUnloadModel }),
     ...(apiInstallEngine && { apiInstallEngine }),
     ...(apiInstallStatus && { apiInstallStatus }),
+    ...(apiInstallPackage && { apiInstallPackage }),
     ...(apiGetDiskUsage && { apiGetDiskUsage }),
   });
   const {
@@ -360,13 +362,15 @@ export default function EngineCompatibilityMatrix({
                       )}
                       {/* Hidden while a license review is all that is left: the
                           engine is installed, and Accept (in the panel) is next. */}
-                      {!b.available && b.one_click_install && !reasonMentionsLicense(b.reason) && (
+                      {!b.available &&
+                        (b.one_click_install || (activeFamily === 'asr' && b.installable)) &&
+                        !reasonMentionsLicense(b.reason) && (
                         <Button
                           size="sm"
                           variant="subtle"
                           onClick={() => {
                             setSelectedId(b.id); // progress renders in the panel
-                            inv.startInstall(b.id);
+                            inv.installBackend(b.id);
                           }}
                           disabled={installRunning}
                           loading={installRunning}

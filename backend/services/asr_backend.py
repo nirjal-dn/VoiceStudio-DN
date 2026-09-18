@@ -1586,7 +1586,6 @@ class PyTorchWhisperBackend(ASRBackend):
 
     def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
         import soundfile as sf
-        import torch
         self._ensure_pipe()
         # #2039: libsndfile cannot open MP4/M4A (AAC), which /transcribe and
         # the MCP tool both accept. Those decode through the validated ffmpeg
@@ -1599,7 +1598,10 @@ class PyTorchWhisperBackend(ASRBackend):
             audio_np, sr = _decode_audio_16k_mono(audio_path), 16000
         if audio_np.ndim > 1:
             audio_np = audio_np.mean(axis=1)
-        bs = 16 if torch.cuda.is_available() else 2
+        # Keep inference single-chunked. A batch of 16 fifteen-second chunks
+        # multiplies Whisper's activation/workspace memory and can exhaust
+        # VRAM even when model-load preflight passes.
+        bs = 1
         result = self._pipe(
             {"array": audio_np, "sampling_rate": sr},
             return_timestamps="word" if word_timestamps else True,
@@ -3127,6 +3129,27 @@ _INSTALL_HINTS: dict[str, str] = {
     ),
 }
 
+# Packages that can be installed into the running VoiceStudio environment
+# without requiring a separate sidecar or a conflicting framework stack.
+# Engines absent from this map remain manual/configuration-only by design.
+_INSTALL_PACKAGES: dict[str, str] = {
+    "whisperx": "whisperx",
+    "faster-whisper": "faster-whisper",
+    # Code-switch is a thin Faster-Whisper specialization; installing the
+    # shared package is all it needs.
+    "whisper-ne-en":   "faster-whisper",
+    "mlx-whisper": "mlx-whisper",
+    "moonshine": "moonshine-onnx",
+    "funasr": "funasr",
+    "sherpa-onnx-asr": "sherpa-onnx",
+    "parakeet-mlx": "parakeet-mlx",
+}
+
+
+def install_package_for(backend_id: str) -> str | None:
+    """Return the backend-owned package mapping, never a user-supplied command."""
+    return _INSTALL_PACKAGES.get(backend_id)
+
 # Most-recent failure per backend, so a transient probe error survives between
 # Settings refreshes (parity with tts_backend._LAST_ERRORS).
 _LAST_ERRORS: dict[str, str] = {}
@@ -3256,6 +3279,8 @@ def list_backends(*, include_hidden: bool = False) -> list[dict]:
             # pre-existing token-leak gap, matching TTS's redaction guarantee).
             "reason": None if ok else scrub_text(msg),
             "install_hint": _INSTALL_HINTS.get(bid),
+            "installable": bid in _INSTALL_PACKAGES,
+            "install_package": _INSTALL_PACKAGES.get(bid),
             "last_error": _LAST_ERRORS.get(bid),
             "isolation_mode": isolation,
             "gpu_compat": list(gpu_compat),

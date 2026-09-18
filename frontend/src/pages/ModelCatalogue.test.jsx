@@ -20,7 +20,11 @@ vi.mock('../components/settings/EnginesTab', () => ({
   ),
 }));
 vi.mock('../components/settings/ModelStoreTab', () => ({
-  default: ({ family }) => <div data-testid="stub-weights">{family}</div>,
+  default: ({ family, ownedToo }) => (
+    <div data-testid="stub-weights" data-owned-too={ownedToo ? 'true' : 'false'}>
+      {family}
+    </div>
+  ),
 }));
 vi.mock('../components/catalogue/SetupSummary', () => ({
   default: ({ onChange }) => (
@@ -58,6 +62,7 @@ describe('ModelCatalogue', () => {
     expect(screen.getByTestId('stub-engines')).toHaveTextContent('tts');
     expect(screen.getByTestId('stub-engines')).toHaveAttribute('data-catalogue-layout', 'true');
     expect(screen.getByTestId('stub-weights')).toHaveTextContent('tts');
+    expect(screen.getByTestId('stub-weights')).toHaveAttribute('data-owned-too', 'true');
     expect(screen.queryByRole('tab')).toBeNull();
     // Reading order: summary above engines above weights.
     const [summary, engines, weights] = ['stub-summary', 'stub-engines', 'stub-weights'].map((id) =>

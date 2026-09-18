@@ -83,6 +83,7 @@ export default function useEngineInventory({
   apiUnloadModel = unloadLoadedModel,
   apiInstallEngine = installSidecarEngine,
   apiInstallStatus = getSidecarInstallStatus,
+  apiInstallPackage = null,
   apiGetDiskUsage = getEngineDiskUsage,
 }) {
   const { t } = useTranslation();
@@ -358,6 +359,19 @@ export default function useEngineInventory({
     [apiInstallEngine, refreshInstall, reload, t],
   );
 
+  const installBackend = useCallback(
+    async (id) => {
+      if (!apiInstallPackage) return startInstall(id);
+      try {
+        await apiInstallPackage(id);
+        await reload();
+      } catch (e) {
+        toastErrorWithReport(t('engines.installFailed', { message: e?.message || String(e) }), e);
+      }
+    },
+    [apiInstallPackage, reload, startInstall, t],
+  );
+
   // Poll running install jobs every 1.5 s; keyed on the SET of running ids so
   // every poll's map replacement does not tear down the interval.
   const runningInstallKey = Object.entries(installByEngine)
@@ -445,6 +459,7 @@ export default function useEngineInventory({
     runSelfTest,
     installByEngine,
     startInstall,
+    installBackend,
     loadedByEngine,
     unloadingId,
     unloadEngine,

@@ -26,6 +26,7 @@ export const queryKeys = {
   systemLogs: (tail?: number) => ['system-logs', tail ?? 300] as const,
   tauriLogs: (tail?: number) => ['tauri-logs', tail ?? 300] as const,
   models: ['models'] as const,
+  dictationModels: ['dictation-models'] as const,
   recommendations: ['recommendations'] as const,
   preflight: ['preflight'] as const,
   engines: ['engines'] as const,
@@ -269,6 +270,7 @@ export function useInstallModel() {
       // Some model installs make an engine selectable; refresh every engine
       // indicator rather than leaving a stale unavailable snapshot behind.
       qc.invalidateQueries({ queryKey: queryKeys.engines });
+      qc.invalidateQueries({ queryKey: queryKeys.dictationModels });
     },
   });
 }
@@ -282,6 +284,7 @@ export function useDeleteModel() {
       qc.invalidateQueries({ queryKey: queryKeys.setupStatus });
       qc.invalidateQueries({ queryKey: queryKeys.recommendations });
       qc.invalidateQueries({ queryKey: queryKeys.engines });
+      qc.invalidateQueries({ queryKey: queryKeys.dictationModels });
     },
   });
 }

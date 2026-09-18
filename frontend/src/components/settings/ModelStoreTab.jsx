@@ -15,10 +15,10 @@ export function unownedModels(models) {
  * (pipeline weights such as speaker diarisation), grouped by capability with
  * install / reinstall / delete per row and platform-incompatible rows behind
  * a per-section toggle. Everything an engine owns is listed under that
- * engine in the catalogue's detail panel instead (EngineWeights); with
- * `family` set this renders only that family's leftovers, with `family`
- * null every unowned row. Renders nothing at all when there is nothing to
- * show, so hosts can mount it unconditionally.
+ * engine in the catalogue's detail panel instead (EngineWeights). `ownedToo`
+ * exposes engine-owned weights as a complete catalogue view; with `family`
+ * set this renders only that family's rows. Renders nothing at all when
+ * there is nothing to show, so hosts can mount it unconditionally.
  */
 export default function ModelStoreTab({ family = null, title = null, ownedToo = false }) {
   const { t } = useTranslation();

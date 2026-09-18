@@ -67,10 +67,10 @@ const buttonVariants = cva(
         icon: 'size-9',
 
         // ── VoiceStudio ──
-        omniSm: 'px-2.5 py-[3px] text-xs',
-        omniMd: 'px-3 py-1.5 text-sm',
-        chip: 'px-2 py-0.5 text-xs',
-        preset: 'px-2 py-[3px] text-xs',
+        omniSm: 'px-2.5 py-[3px] text-xs leading-4',
+        omniMd: 'px-3 py-1.5 text-sm leading-5',
+        chip: 'px-2 py-0.5 text-xs leading-4',
+        preset: 'px-2 py-[3px] text-xs leading-4',
         iconSm: 'size-5 p-0',
         iconMd: 'size-[22px] p-0',
       },

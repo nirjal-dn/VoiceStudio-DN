@@ -155,6 +155,10 @@ export async function installTranslationEngine(id: string): Promise<InstallEngin
   return apiPost<InstallEngineResponse>(`/engines/translation/${id}/install`, {});
 }
 
+export async function installASREngine(id: string): Promise<InstallEngineResponse> {
+  return apiPost<InstallEngineResponse>(`/engines/asr/${encodeURIComponent(id)}/install`, {});
+}
+
 // ── Effect presets ──────────────────────────────────────────────────────
 
 export interface EffectPreset {

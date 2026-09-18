@@ -93,6 +93,51 @@ def _ensure_rocm_torch():
     print("✓ ROCm torch installed")
 
 
+# CTranslate2 4.4.0 is retained in the universal lockfile because older
+# WhisperX releases still declare ``ctranslate2<4.5``. Its Linux wheel can,
+# however, request an executable stack and fail on hardened kernels. The
+# standalone faster-whisper engine supports current 4.x releases, so repair
+# only this native package after the normal sync when its import is broken.
+CTRANSLATE2_SAFE_VERSION = "ctranslate2>=4.8.2,<5"
+
+
+def _ensure_ctranslate2_runtime():
+    """Keep CTranslate2 importable after ``uv sync`` on hardened Linux."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctranslate2
+        from packaging.version import Version
+
+        if Version(ctranslate2.__version__) >= Version("4.8.2"):
+            print(f"✓ CTranslate2 runtime: {ctranslate2.__version__}")
+            return
+        reason = f"version {ctranslate2.__version__} is below 4.8.2"
+    except Exception as exc:
+        reason = f"native import failed ({type(exc).__name__}: {exc})"
+
+    print(f"⚙ Repairing CTranslate2 runtime: {reason}")
+    try:
+        subprocess.run(
+            [
+                "uv", "pip", "install", "--upgrade", "--no-deps",
+                "--python", sys.executable, CTRANSLATE2_SAFE_VERSION,
+            ],
+            check=True,
+            timeout=300,
+        )
+        import importlib
+        importlib.invalidate_caches()
+        import ctranslate2
+        print(f"✓ CTranslate2 runtime repaired: {ctranslate2.__version__}")
+    except Exception as exc:
+        raise RuntimeError(
+            "CTranslate2 could not be repaired after uv sync. "
+            "WhisperX/Faster-Whisper ASR will remain unavailable. "
+            f"Details: {exc}"
+        ) from exc
+
+
 # ── Windows: VC++ Redistributable ─────────────────────────────────────────
 
 def _ensure_vcredist_windows():
@@ -201,6 +246,7 @@ def _count_cudnn8_libs(lib_dir):
 
 
 def main():
+    _ensure_ctranslate2_runtime()
     # ── Step 1: Windows VC++ Redistributable ──────────────────────────────
     _ensure_vcredist_windows()
 

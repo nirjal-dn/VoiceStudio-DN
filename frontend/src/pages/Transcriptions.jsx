@@ -11,19 +11,21 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next';
 import {
   Mic,
-  Copy,
   Trash2,
   Search,
   Clock,
   Languages,
   FileText,
   FileAudio,
-  Download,
+  FileDown,
   Square,
   Upload,
   X,
-  Play,
-  Pause,
+  Pencil,
+  Clipboard,
+  RotateCw,
+  ChevronDown,
+  Check,
   Save,
 } from 'lucide-react';
 import { Button } from '../ui';
@@ -107,6 +109,8 @@ export default function TranscriptionsPage() {
   const installTarget = readiness.target || readiness.missing?.recommended;
   const [starting, setStarting] = useState(false);
   const [uploadMode, setUploadMode] = useState('accurate');
+  const [modeOpen, setModeOpen] = useState(false);
+  const modeMenuRef = useRef(null);
   const [uploadLanguage, setUploadLanguage] = useState('');
   const [uploading, setUploading] = useState(false);
   const [selectedAudio, setSelectedAudio] = useState(null);
@@ -189,6 +193,22 @@ export default function TranscriptionsPage() {
   }, [uploading]);
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!modeOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!modeMenuRef.current?.contains(event.target)) setModeOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setModeOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [modeOpen]);
 
   // Listen for new transcriptions, including ones the desktop pill's own
   // window adds.
@@ -356,7 +376,7 @@ export default function TranscriptionsPage() {
             })}
           </p>
         </div>
-        <div className="txn-header__right flex items-center gap-[6px]">
+        <div className="txn-header__right flex flex-wrap items-center justify-end gap-2">
           {transcriptions.length > 0 && (
             <Button
               size="sm"
@@ -386,18 +406,20 @@ export default function TranscriptionsPage() {
               <Button
                 size="sm"
                 variant="ghost"
+                leading={<FileDown size={13} />}
                 onClick={exportAll}
                 title={t('transcriptions.export_title')}
               >
-                <Download size={13} /> {t('transcriptions.export')}
+                {t('transcriptions.export')}
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
+                leading={<Trash2 size={13} />}
                 onClick={clearAll}
                 title={t('transcriptions.clear_title')}
               >
-                <Trash2 size={13} /> {t('transcriptions.clear')}
+                {t('transcriptions.clear')}
               </Button>
             </>
           )}
@@ -472,8 +494,8 @@ export default function TranscriptionsPage() {
             : t('transcriptions.choose_audio', { defaultValue: 'Choose or drop audio' })}
         </label>
         {uploading && (
-          <Button size="sm" variant="ghost" onClick={cancelUpload}>
-            <Square size={12} /> {t('common.cancel', { defaultValue: 'Cancel' })}
+          <Button size="sm" variant="ghost" leading={<Square size={12} />} onClick={cancelUpload}>
+            {t('common.cancel', { defaultValue: 'Cancel' })}
           </Button>
         )}
         {selectedAudio && (
@@ -485,8 +507,8 @@ export default function TranscriptionsPage() {
               className="min-w-0 flex-1"
             />
             <Button
-              size="sm"
-              variant="ghost"
+              variant="icon"
+              iconSize="sm"
               onClick={clearSelectedAudio}
               title={t('transcriptions.clear_audio', { defaultValue: 'Clear selected audio' })}
               aria-label={t('transcriptions.clear_audio', { defaultValue: 'Clear selected audio' })}
@@ -496,20 +518,58 @@ export default function TranscriptionsPage() {
           </div>
         )}
         <div className="flex items-center gap-2 text-xs text-fg-muted">
-          <label htmlFor="transcription-mode">
+          <span id="transcription-mode-label">
             {t('transcriptions.mode', { defaultValue: 'Mode' })}
-          </label>
-          <select
-            id="transcription-mode"
-            value={uploadMode}
-            onChange={(event) => setUploadMode(event.target.value)}
-            className="rounded-lg border border-border bg-bg px-2.5 py-2 text-fg"
-          >
-            <option value="accurate">
-              {t('transcriptions.accurate', { defaultValue: 'Accurate' })}
-            </option>
-            <option value="fast">{t('transcriptions.fast', { defaultValue: 'Fast' })}</option>
-          </select>
+          </span>
+          <div ref={modeMenuRef} className="relative">
+            <button
+              type="button"
+              id="transcription-mode"
+              className="input-base flex h-8 min-w-[104px] items-center justify-between gap-[6px] rounded-lg border-0 px-2 py-1 text-left text-[0.65rem] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--color-bg-elev-1)] focus-visible:outline-2 focus-visible:outline-[var(--chrome-accent)]"
+              aria-haspopup="listbox"
+              aria-expanded={modeOpen}
+              aria-labelledby="transcription-mode-label"
+              onClick={() => setModeOpen((open) => !open)}
+            >
+              <span>
+                {uploadMode === 'accurate'
+                  ? t('transcriptions.accurate', { defaultValue: 'Accurate' })
+                  : t('transcriptions.fast', { defaultValue: 'Fast' })}
+              </span>
+              <ChevronDown
+                size={13}
+                className={`shrink-0 transition-transform ${modeOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+            {modeOpen && (
+              <div
+                className="absolute right-0 z-[var(--z-overlay)] mt-1 min-w-[136px] max-w-[calc(100vw-16px)] overflow-hidden rounded-lg border-0 bg-[var(--color-bg)] p-0 text-[var(--color-fg)] shadow-xl"
+                role="listbox"
+                aria-labelledby="transcription-mode-label"
+              >
+                {[
+                  ['accurate', t('transcriptions.accurate', { defaultValue: 'Accurate' })],
+                  ['fast', t('transcriptions.fast', { defaultValue: 'Fast' })],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="option"
+                    aria-selected={uploadMode === value}
+                    className="flex w-full items-center justify-between gap-3 rounded-none border-0 bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-[var(--chrome-fg)] transition-colors hover:bg-[var(--chrome-hover-bg)] focus-visible:bg-[var(--chrome-hover-bg)] focus-visible:outline-none"
+                    onClick={() => {
+                      setUploadMode(value);
+                      setModeOpen(false);
+                    }}
+                  >
+                    {label}
+                    {uploadMode === value && <Check size={12} className="text-brand" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <label className="flex items-center gap-2 text-xs text-fg-muted">
           {t('transcriptions.language_hint', { defaultValue: 'Language' })}
@@ -517,7 +577,7 @@ export default function TranscriptionsPage() {
             value={uploadLanguage}
             onChange={(event) => setUploadLanguage(event.target.value)}
             placeholder="auto"
-            className="w-20 rounded-lg border border-border bg-bg px-2.5 py-2 text-fg"
+            className="h-8 w-[68px] rounded-lg border border-border bg-bg px-2 py-1 text-xs text-fg"
             aria-label={t('transcriptions.language_hint', { defaultValue: 'Language' })}
           />
         </label>
@@ -556,7 +616,12 @@ export default function TranscriptionsPage() {
                   />
                 )}
                 <div className="flex items-center gap-3">
-                  <Button size="sm" variant="ghost" onClick={readiness.check}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leading={<RotateCw size={12} />}
+                    onClick={readiness.check}
+                  >
                     {t('common.refresh')}
                   </Button>
                   {readiness.error && <span role="alert">{t('common.error')}</span>}
@@ -716,7 +781,7 @@ export default function TranscriptionsPage() {
         <section className="txn-detail flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-bg-elev-1 shadow-sm">
           {selected ? (
             <>
-              <div className="txn-detail__header flex items-center justify-between px-[14px] py-[10px] [border-bottom:1px_solid_var(--color-border)]">
+              <div className="txn-detail__header flex flex-wrap items-center justify-between gap-3 px-[14px] py-[10px] [border-bottom:1px_solid_var(--color-border)]">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm font-semibold text-fg">
                     <FileAudio size={15} className="text-brand" />
@@ -728,32 +793,52 @@ export default function TranscriptionsPage() {
                     {new Date(selected.timestamp).toLocaleString()}
                   </span>
                 </div>
-                <div className="txn-detail__actions flex gap-[4px]">
+                <div className="txn-detail__actions flex flex-wrap items-center justify-end gap-1">
                   <Button
                     size="sm"
                     variant="ghost"
+                    leading={<Clipboard size={12} />}
                     onClick={() => copyText(showRefined ? selected.refined_text : selected.text)}
                   >
-                    <Copy size={12} /> {t('transcriptions.copy')}
+                    {t('transcriptions.copy')}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setEditing((value) => !value)}>
-                    {editing ? <Pause size={12} /> : <Play size={12} />}{' '}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leading={<Pencil size={12} />}
+                    onClick={() => setEditing((value) => !value)}
+                  >
                     {editing
                       ? t('common.cancel', { defaultValue: 'Cancel' })
                       : t('transcriptions.edit', { defaultValue: 'Edit' })}
                   </Button>
                   {selected.segments?.length > 0 && (
                     <>
-                      <Button size="sm" variant="ghost" onClick={() => exportSegments('srt')}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        leading={<FileDown size={12} />}
+                        onClick={() => exportSegments('srt')}
+                      >
                         SRT
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => exportSegments('vtt')}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        leading={<FileDown size={12} />}
+                        onClick={() => exportSegments('vtt')}
+                      >
                         VTT
                       </Button>
                     </>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => deleteEntry(selected.id)}>
-                    <Trash2 size={12} /> {t('transcriptions.delete')}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leading={<Trash2 size={12} />}
+                    onClick={() => deleteEntry(selected.id)}
+                  >
+                    {t('transcriptions.delete')}
                   </Button>
                 </div>
               </div>
@@ -792,10 +877,11 @@ export default function TranscriptionsPage() {
                   <Button
                     size="sm"
                     variant="primary"
+                    leading={<Save size={12} />}
                     onClick={saveEditedTranscript}
                     className="mt-3"
                   >
-                    <Save size={12} /> {t('common.save', { defaultValue: 'Save' })}
+                    {t('common.save', { defaultValue: 'Save' })}
                   </Button>
                 )}
               </div>
