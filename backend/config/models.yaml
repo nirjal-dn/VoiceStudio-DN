@@ -117,20 +117,12 @@ models:
     size_gb: 2.9
     note: "Previous-generation OpenAI Whisper large model for compatibility and legacy local transcription workloads."
 
-  - repo_id: "Systran/faster-whisper-large-v2"
-    label: "Whisper large-v2 (faster-whisper — English path for Nepali+English Auto)"
-    role: ASR
-    engines: [ne-en-router]
-    size_gb: 2.9
-    curated_on: [cuda, rocm, cpu, darwin-x86_64]
-    note: "CTranslate2 large-v2. Powers the English + VAD/segmentation + language-ID path of the Nepali + English (Auto) router; the Nepali path uses IndicConformer. Override with OMNIVOICE_NEEN_WHISPER_MODEL."
-
   - repo_id: "ai4bharat/indic-conformer-600m-multilingual"
     label: "IndicConformer 600M (Nepali + 21 Indian languages, CPU)"
     role: ASR
-    engines: [indic-conformer, ne-en-router]
+    engines: [indic-conformer]
     size_gb: 2.4
-    note: "Gated on Hugging Face: accept the model terms and set a Hugging Face token (Settings → API Keys) before installing. MIT licence. Also serves the Nepali path of the Nepali + English (Auto) router."
+    note: "Gated on Hugging Face: accept the model terms and set a Hugging Face token (Settings → API Keys) before installing. MIT licence."
 
   - repo_id: "mlx-community/whisper-tiny-mlx"
     label: "Whisper tiny (MLX ASR — fast fallback)"

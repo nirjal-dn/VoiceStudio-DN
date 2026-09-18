@@ -3,8 +3,7 @@
 Engine id: `whisper-ne-en` · speech-to-text · CUDA · CPU · 16 kHz
 
 Shown in **Transcription Model Selection** as **Whisper large-v3 — Nepali+English
-code-switch (single-pass)**. For per-segment routing between IndicConformer and
-Whisper, see **[Nepali + English (Auto)](ne-en-router.md)** instead.
+code-switch (single-pass)**.
 
 Transcribes **code-switched Nepali–English speech** — a single sentence that
 mixes both languages, like:
