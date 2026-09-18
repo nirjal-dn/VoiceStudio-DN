@@ -25,6 +25,7 @@ const THEMES = [
   { id: 'solarized', label: 'Solarized', dot: '#268bd2' },
   { id: 'rose-pine', label: 'Rosé Pine', dot: '#ebbcba' },
   { id: 'catppuccin', label: 'Catppuccin', dot: '#cba6f7' },
+  { id: 'cool-slate', label: 'Cool Slate', dot: '#7aa2f7' },
   { id: 'light', labelKey: 'settings.theme_light', defaultLabel: 'Light', dot: '#1d6b9f' },
 ];
 
