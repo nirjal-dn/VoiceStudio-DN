@@ -19,6 +19,7 @@ import {
   FileText,
   Download,
   Square,
+  Upload,
 } from 'lucide-react';
 import { Button } from '../ui';
 import { detectPlatform } from '../utils/micError';
@@ -30,6 +31,8 @@ import { toMillis } from '../utils/relativeTime';
 import { useEffectiveDictationShortcut } from '../hooks/useEffectiveDictationShortcut';
 import { requestDictationCapture } from '../utils/dictationCapture';
 import { useDictationLive } from '../hooks/useDictationLive';
+import { transcribeAudio } from '../api/transcriptions';
+import { asrMissingPayload, toastAsrModelMissing } from '../utils/asrModelMissing';
 import {
   loadTranscriptions,
   notifyTranscriptionAdded,
@@ -66,6 +69,9 @@ export function addTranscription(entry) {
     language: entry.language || 'unknown',
     duration_s: entry.duration_s || 0,
     segments: entry.segments || [],
+    refined_text: entry.refined_text || undefined,
+    source: entry.source || 'dictation',
+    engine: entry.engine || undefined,
     timestamp: new Date().toISOString(),
   };
   list.unshift(newEntry);
@@ -74,6 +80,7 @@ export function addTranscription(entry) {
   saveTranscriptions(list);
   // Reactive updates, including the main window when the desktop pill wrote it
   notifyTranscriptionAdded(newEntry);
+  return newEntry;
 }
 
 function formatLiveClock(seconds = 0) {
@@ -92,6 +99,9 @@ export default function TranscriptionsPage() {
   // What the progress bar names: the model the user picked, else the recommended one.
   const installTarget = readiness.target || readiness.missing?.recommended;
   const [starting, setStarting] = useState(false);
+  const [uploadMode, setUploadMode] = useState('accurate');
+  const [uploadLanguage, setUploadLanguage] = useState('');
+  const [uploading, setUploading] = useState(false);
   const captureDisabled = readiness.phase !== 'ready' || starting;
   const emptyDescription = t('transcriptions.empty_desc', { shortcut: shortcut.display });
   const normalizedSearch = search.trim();
@@ -117,6 +127,35 @@ export default function TranscriptionsPage() {
       setStarting(false);
     }
   }, [t, captureDisabled, checkReadiness]);
+
+  const handleAudioUpload = useCallback(
+    async (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      setUploading(true);
+      try {
+        const result = await transcribeAudio(file, {
+          mode: uploadMode,
+          language: uploadLanguage,
+        });
+        const entry = addTranscription({
+          ...result,
+          text: result.refined_text || result.text,
+          source: 'upload',
+        });
+        setSelectedId(entry.id);
+        toast.success(t('transcriptions.uploaded', { defaultValue: 'Audio transcribed' }));
+      } catch (error) {
+        const missing = asrMissingPayload(error);
+        if (missing) toastAsrModelMissing(missing);
+        else toast.error(error?.message || t('transcriptions.upload_failed'));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [t, uploadMode, uploadLanguage],
+  );
 
   // Listen for new transcriptions, including ones the desktop pill's own
   // window adds.
@@ -178,7 +217,7 @@ export default function TranscriptionsPage() {
     a.click();
     URL.revokeObjectURL(url);
     toast.success(t('transcriptions.exported'));
-  }, [transcriptions]);
+  }, [t, transcriptions]);
 
   // toMillis keeps this unit-safe (ISO strings today; seconds/ms tolerated)
   // and guards unparseable stamps, which used to render "Invalid Date".
@@ -216,6 +255,25 @@ export default function TranscriptionsPage() {
           </span>
         </div>
         <div className="txn-header__right flex items-center gap-[6px]">
+          <input
+            id="transcription-audio-upload"
+            type="file"
+            accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.webm"
+            className="sr-only"
+            disabled={uploading}
+            onChange={handleAudioUpload}
+          />
+          <label
+            htmlFor="transcription-audio-upload"
+            className={`inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-border bg-bg-elev-1 px-2.5 py-1.5 text-xs text-fg cursor-pointer hover:border-brand ${
+              uploading ? 'pointer-events-none opacity-60' : ''
+            }`}
+          >
+            {uploading ? <Square size={12} /> : <Upload size={13} />}
+            {uploading
+              ? t('transcriptions.transcribing_upload', { defaultValue: 'Transcribing…' })
+              : t('transcriptions.upload_audio', { defaultValue: 'Upload audio' })}
+          </label>
           {transcriptions.length > 0 && (
             <Button
               size="sm"
@@ -262,6 +320,41 @@ export default function TranscriptionsPage() {
           )}
         </div>
       </div>
+
+      <section className="txn-upload flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elev-1 px-3 py-2">
+        <span className="text-xs font-medium text-fg">
+          {t('transcriptions.upload_options', { defaultValue: 'Audio transcription' })}
+        </span>
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
+          {t('transcriptions.mode', { defaultValue: 'Mode' })}
+          <select
+            value={uploadMode}
+            onChange={(event) => setUploadMode(event.target.value)}
+            className="rounded border border-border bg-bg px-2 py-1 text-fg"
+            aria-label={t('transcriptions.mode', { defaultValue: 'Mode' })}
+          >
+            <option value="accurate">
+              {t('transcriptions.accurate', { defaultValue: 'Accurate' })}
+            </option>
+            <option value="fast">{t('transcriptions.fast', { defaultValue: 'Fast' })}</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
+          {t('transcriptions.language_hint', { defaultValue: 'Language hint' })}
+          <input
+            value={uploadLanguage}
+            onChange={(event) => setUploadLanguage(event.target.value)}
+            placeholder="auto"
+            className="w-24 rounded border border-border bg-bg px-2 py-1 text-fg"
+            aria-label={t('transcriptions.language_hint', { defaultValue: 'Language hint' })}
+          />
+        </label>
+        <span className="text-xs text-fg-muted">
+          {t('transcriptions.upload_hint', {
+            defaultValue: 'Choose an audio file above to generate a complete transcript.',
+          })}
+        </span>
+      </section>
 
       {readiness.phase !== 'ready' && (
         <div

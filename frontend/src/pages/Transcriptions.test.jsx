@@ -1,18 +1,20 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { requestDictationCapture, copyToClipboard, toast, readiness, apiJson } = vi.hoisted(() => ({
-  readiness: {
-    phase: 'ready',
-    check: vi.fn().mockResolvedValue(true),
-    install: vi.fn(),
-    select: vi.fn(),
-  },
-  requestDictationCapture: vi.fn(),
-  copyToClipboard: vi.fn(),
-  toast: { error: vi.fn(), success: vi.fn() },
-  apiJson: vi.fn(),
-}));
+const { requestDictationCapture, copyToClipboard, toast, readiness, apiJson, transcribeAudio } =
+  vi.hoisted(() => ({
+    readiness: {
+      phase: 'ready',
+      check: vi.fn().mockResolvedValue(true),
+      install: vi.fn(),
+      select: vi.fn(),
+    },
+    requestDictationCapture: vi.fn(),
+    copyToClipboard: vi.fn(),
+    toast: { error: vi.fn(), success: vi.fn() },
+    apiJson: vi.fn(),
+    transcribeAudio: vi.fn(),
+  }));
 
 vi.mock('../hooks/useDictationReadiness', () => ({
   useDictationReadiness: () => readiness,
@@ -20,6 +22,9 @@ vi.mock('../hooks/useDictationReadiness', () => ({
 vi.mock('../api/client', async (importOriginal) => ({
   ...(await importOriginal()),
   apiJson: (...args) => apiJson(...args),
+}));
+vi.mock('../api/transcriptions', () => ({
+  transcribeAudio: (...args) => transcribeAudio(...args),
 }));
 
 vi.mock('../utils/copyText', () => ({ copyText: copyToClipboard }));
@@ -45,6 +50,7 @@ describe('Transcriptions capture entry point', () => {
     localStorage.clear();
     requestDictationCapture.mockReset().mockResolvedValue(undefined);
     toast.error.mockReset();
+    transcribeAudio.mockReset();
   });
 
   it('shows the effective shortcut and starts the shared recorder from the empty state', async () => {
@@ -94,6 +100,29 @@ describe('Transcriptions capture entry point', () => {
     render(<TranscriptionsPage />);
     act(() => {
       addTranscription({ text: 'The shared capture path works.', language: 'en' });
+    });
+
+    it('uploads an audio clip, saves the complete transcript, and selects it', async () => {
+      transcribeAudio.mockResolvedValue({
+        text: 'Uploaded audio transcript.',
+        language: 'en',
+        duration_s: 12.4,
+        segments: [{ start: 0, end: 2.5, text: 'Uploaded audio transcript.' }],
+        engine: 'whisper',
+      });
+      render(<TranscriptionsPage />);
+      const file = new File(['audio'], 'meeting.wav', { type: 'audio/wav' });
+      fireEvent.change(screen.getByLabelText('Upload audio'), {
+        target: { files: [file] },
+      });
+
+      await waitFor(() => expect(transcribeAudio).toHaveBeenCalled());
+      expect(transcribeAudio).toHaveBeenCalledWith(
+        file,
+        expect.objectContaining({ mode: 'accurate', language: '' }),
+      );
+      expect(await screen.findByText('Uploaded audio transcript.')).toBeInTheDocument();
+      expect(screen.getByText('2.5s')).toBeInTheDocument();
     });
 
     expect(await screen.findByText('The shared capture path works.')).toBeInTheDocument();
