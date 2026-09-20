@@ -47,6 +47,13 @@ _REF_ALLOWLIST = (
     "Remote workers** sends individual jobs to GPUs",
     # owner-requested workspace promotion (engines + model store out of Settings), no issue
     "Model Catalogue** — a workspace of its own",
+    # owner-directed Nepali fork work (VoiceStudio-DN), no upstream issue
+    "**TTS mode** (Automatic / Single language / Nepali + English mixed)",
+    "**`xtts-en` engine**",
+    "**`auto-lang` ASR**",
+    "**`auto-lang` TTS**",
+    "**Nepali + English (Auto)** transcription",
+    "**`whisper-ne-en` ASR**",
 )
 
 _HEADING = re.compile(r"^## \[([^\]]+)\](?:\s*[—–-]\s*(.*))?$")

@@ -471,6 +471,16 @@ class SubprocessBackend(TTSBackend):
         """
         raise NotImplementedError
 
+    def sidecar_env(self) -> dict:
+        """Extra environment for THIS engine's sidecar process.
+
+        Default empty: the sidecar inherits the parent's environment (Locked
+        Decision D5). Overridden by adapters that share one sidecar script
+        between variants, where the variant cannot come from the parent's own
+        environment because both engines may be resident at once.
+        """
+        return {}
+
     @classmethod
     def sidecar_script(cls) -> Path:
         """Path to the sidecar entrypoint (`backend/engines/<id>/main.py`)."""
@@ -498,6 +508,11 @@ class SubprocessBackend(TTSBackend):
         #     past our length-prefix reads.
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        #   - Plus this engine's own sidecar_env() overrides, for adapters that
+        #     share ONE sidecar script between variants (xtts-nepali/xtts-en):
+        #     the variant cannot be read from the parent's environment, because
+        #     both engines may be resident in the same process at once.
+        env.update({str(k): str(v) for k, v in (self.sidecar_env() or {}).items()})
 
         kwargs: dict = {
             "stdin": subprocess.PIPE,

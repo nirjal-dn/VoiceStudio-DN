@@ -662,7 +662,16 @@
     "accent_dialect_hint": "l'un ou l'autre, jamais les deux",
     "reset_to_description": "Réinitialiser selon la description",
     "chips_more": "{{count}} de plus…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "Mode TTS",
+    "tts_mode_auto": "Automatique",
+    "tts_mode_single": "Une seule langue",
+    "tts_mode_mixed": "Népalais + anglais mélangés",
+    "tts_mode_hint": "Le mode automatique répartit le texte mêlant népalais et anglais entre deux moteurs ; le texte monolingue est inchangé.",
+    "cs_ne_backend": "Moteur népalais",
+    "cs_en_backend": "Moteur anglais",
+    "cs_crossfade": "Fondu à la jonction",
+    "cs_backend_default": "Par défaut"
   },
   "about": {
     "app": "Application",

@@ -662,7 +662,16 @@
     "accent_dialect_hint": "um ou outro, nunca os dois",
     "reset_to_description": "Redefinir conforme a descrição",
     "chips_more": "mais {{count}}…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "Modo de TTS",
+    "tts_mode_auto": "Automático",
+    "tts_mode_single": "Um único idioma",
+    "tts_mode_mixed": "Nepalês + inglês misturados",
+    "tts_mode_hint": "O modo automático divide o texto misto de nepalês e inglês entre dois motores; texto num só idioma não muda.",
+    "cs_ne_backend": "Motor de nepalês",
+    "cs_en_backend": "Motor de inglês",
+    "cs_crossfade": "Crossfade na transição",
+    "cs_backend_default": "Padrão"
   },
   "about": {
     "app": "Aplicativo",

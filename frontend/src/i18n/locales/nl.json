@@ -662,7 +662,16 @@
     "accent_dialect_hint": "het een of het ander, nooit beide",
     "reset_to_description": "Terugzetten naar beschrijving",
     "chips_more": "nog {{count}}…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS-modus",
+    "tts_mode_auto": "Automatisch",
+    "tts_mode_single": "Eén taal",
+    "tts_mode_mixed": "Nepalees + Engels gemengd",
+    "tts_mode_hint": "Automatisch verdeelt gemengde Nepalees-Engelse tekst over twee engines; eentalige tekst blijft ongewijzigd.",
+    "cs_ne_backend": "Nepalese engine",
+    "cs_en_backend": "Engelse engine",
+    "cs_crossfade": "Crossfade op de overgang",
+    "cs_backend_default": "Standaard"
   },
   "about": {
     "app": "App",

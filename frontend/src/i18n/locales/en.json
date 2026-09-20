@@ -425,7 +425,16 @@
     "accent_dialect_hint": "one or the other, never both",
     "reset_to_description": "Reset to description",
     "chips_more": "{{count}} more…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS mode",
+    "tts_mode_auto": "Automatic",
+    "tts_mode_single": "Single language",
+    "tts_mode_mixed": "Nepali + English mixed",
+    "tts_mode_hint": "Automatic splits mixed Nepali and English text across two engines; pure text is unchanged.",
+    "cs_ne_backend": "Nepali engine",
+    "cs_en_backend": "English engine",
+    "cs_crossfade": "Boundary crossfade",
+    "cs_backend_default": "Default"
   },
   "settings": {
     "title": "Settings",

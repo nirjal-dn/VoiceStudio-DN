@@ -662,7 +662,16 @@
     "accent_dialect_hint": "二選一，不能同時選擇",
     "reset_to_description": "依描述重設",
     "chips_more": "還有 {{count}} 個…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS 模式",
+    "tts_mode_auto": "自動",
+    "tts_mode_single": "單一語言",
+    "tts_mode_mixed": "尼泊爾語 + 英語混合",
+    "tts_mode_hint": "自動模式會把尼泊爾語與英語混排的文字分給兩個引擎；單一語言的文字維持不變。",
+    "cs_ne_backend": "尼泊爾語引擎",
+    "cs_en_backend": "英語引擎",
+    "cs_crossfade": "銜接處交叉淡化",
+    "cs_backend_default": "預設"
   },
   "about": {
     "app": "應用程式",

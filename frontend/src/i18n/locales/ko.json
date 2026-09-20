@@ -895,7 +895,16 @@
     "accent_dialect_hint": "둘 중 하나만, 동시에는 불가",
     "reset_to_description": "설명에 따라 재설정",
     "chips_more": "{{count}}개 더 보기…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS 모드",
+    "tts_mode_auto": "자동",
+    "tts_mode_single": "단일 언어",
+    "tts_mode_mixed": "네팔어 + 영어 혼합",
+    "tts_mode_hint": "자동 모드는 네팔어와 영어가 섞인 텍스트를 두 엔진에 나눠 보냅니다. 단일 언어 텍스트는 그대로입니다.",
+    "cs_ne_backend": "네팔어 엔진",
+    "cs_en_backend": "영어 엔진",
+    "cs_crossfade": "경계 크로스페이드",
+    "cs_backend_default": "기본값"
   },
   "about": {
     "app": "앱",

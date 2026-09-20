@@ -662,7 +662,16 @@
     "accent_dialect_hint": "أحدهما فقط، لا كلاهما",
     "reset_to_description": "إعادة الضبط حسب الوصف",
     "chips_more": "{{count}} أخرى…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "وضع تحويل النص إلى كلام",
+    "tts_mode_auto": "تلقائي",
+    "tts_mode_single": "لغة واحدة",
+    "tts_mode_mixed": "نيبالي + إنجليزي مختلط",
+    "tts_mode_hint": "يوزّع الوضع التلقائي النص المختلط بالنيبالية والإنجليزية على محركين؛ النص أحادي اللغة لا يتغيّر.",
+    "cs_ne_backend": "محرك النيبالية",
+    "cs_en_backend": "محرك الإنجليزية",
+    "cs_crossfade": "تلاشٍ متقاطع عند الحدود",
+    "cs_backend_default": "افتراضي"
   },
   "about": {
     "app": "التطبيق",

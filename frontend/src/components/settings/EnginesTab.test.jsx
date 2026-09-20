@@ -15,6 +15,7 @@ vi.mock('../../api/engines', () => ({
   getEngineHealth: vi.fn(),
   selfTestEngine: vi.fn(),
   installSidecarEngine: vi.fn(),
+  installASREngine: vi.fn(),
   getSidecarInstallStatus: vi.fn(),
   getEngineDiskUsage: vi.fn(),
 }));

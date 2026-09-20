@@ -25,6 +25,18 @@ export interface GenerateSlice {
   instruct: string;
   language: string;
 
+  /**
+   * How mixed Nepali/English text is rendered (#Nepali code-switch).
+   * 'auto' splits only genuinely mixed text, 'single' never splits (the
+   * historical behaviour), 'code_switch' always splits. The three advanced
+   * fields below are per-request overrides of the backend's configured
+   * defaults; empty / 0 means "use what the backend is set to".
+   */
+  ttsMode: 'auto' | 'single' | 'code_switch';
+  csNeEngine: string;
+  csEnEngine: string;
+  csCrossfadeMs: number;
+
   // Production overrides
   speed: number;
   steps: number;
@@ -66,6 +78,11 @@ export interface GenerateSlice {
   setInstruct: (v: string) => void;
   setLanguage: (v: string) => void;
 
+  setTtsMode: (v: 'auto' | 'single' | 'code_switch') => void;
+  setCsNeEngine: (v: string) => void;
+  setCsEnEngine: (v: string) => void;
+  setCsCrossfadeMs: (v: number) => void;
+
   setSpeed: (v: number) => void;
   setSteps: (v: number) => void;
   setCfg: (v: number) => void;
@@ -100,6 +117,11 @@ export const createGenerateSlice: StateCreator<GenerateSlice, [], [], GenerateSl
   instruct: '',
   language: 'Auto',
 
+  ttsMode: 'auto',
+  csNeEngine: '',
+  csEnEngine: '',
+  csCrossfadeMs: 0,
+
   speed: 1.0,
   steps: 16, // ~16 to avoid ODE destabilisation in the flow-matcher.
   cfg: 2.0,
@@ -121,6 +143,11 @@ export const createGenerateSlice: StateCreator<GenerateSlice, [], [], GenerateSl
   setRefText: (v) => set({ refText: v }),
   setInstruct: (v) => set({ instruct: v }),
   setLanguage: (v) => set({ language: v }),
+
+  setTtsMode: (v) => set({ ttsMode: v }),
+  setCsNeEngine: (v) => set({ csNeEngine: v }),
+  setCsEnEngine: (v) => set({ csEnEngine: v }),
+  setCsCrossfadeMs: (v) => set({ csCrossfadeMs: v }),
 
   setSpeed: (v) => set({ speed: v }),
   setSteps: (v) => set({ steps: v }),

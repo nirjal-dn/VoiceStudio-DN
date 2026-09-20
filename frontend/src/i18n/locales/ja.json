@@ -662,7 +662,16 @@
     "accent_dialect_hint": "どちらか一方のみ、両方は不可",
     "reset_to_description": "説明に基づいてリセット",
     "chips_more": "他{{count}}件…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS モード",
+    "tts_mode_auto": "自動",
+    "tts_mode_single": "単一言語",
+    "tts_mode_mixed": "ネパール語＋英語の混在",
+    "tts_mode_hint": "自動では、ネパール語と英語が混在するテキストを 2 つのエンジンに振り分けます。単一言語のテキストはこれまでどおりです。",
+    "cs_ne_backend": "ネパール語エンジン",
+    "cs_en_backend": "英語エンジン",
+    "cs_crossfade": "境界のクロスフェード",
+    "cs_backend_default": "既定"
   },
   "about": {
     "app": "アプリ",

@@ -662,7 +662,16 @@
     "accent_dialect_hint": "इनमें से एक ही, दोनों नहीं",
     "reset_to_description": "विवरण के अनुसार रीसेट करें",
     "chips_more": "{{count}} और…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "टीटीएस मोड",
+    "tts_mode_auto": "स्वचालित",
+    "tts_mode_single": "एक ही भाषा",
+    "tts_mode_mixed": "नेपाली + अंग्रेज़ी मिश्रित",
+    "tts_mode_hint": "स्वचालित मोड मिश्रित नेपाली-अंग्रेज़ी पाठ को दो इंजनों में बाँटता है; एकभाषी पाठ अपरिवर्तित रहता है।",
+    "cs_ne_backend": "नेपाली इंजन",
+    "cs_en_backend": "अंग्रेज़ी इंजन",
+    "cs_crossfade": "सीमा क्रॉसफ़ेड",
+    "cs_backend_default": "डिफ़ॉल्ट"
   },
   "about": {
     "app": "ऐप",

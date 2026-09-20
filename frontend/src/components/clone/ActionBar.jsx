@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Button, Progress } from '../../ui';
 import MultiLangPicker from '../MultiLangPicker';
+import { useAppStore } from '../../store';
 import ALL_LANGUAGES from '../../languages.json';
 import { LANG_CODES } from '../../utils/languages';
 import { stopActivePlayback } from '../../utils/playback';
@@ -65,6 +66,21 @@ export default function ActionBar({
   generationProgress,
   wasGeneratingRef,
 }) {
+  // Mixed Nepali/English routing. Read straight from the store rather than
+  // drilled through App → CloneDesignTab: nothing between here and the store
+  // has any use for it.
+  const ttsMode = useAppStore((s) => s.ttsMode);
+  const setTtsMode = useAppStore((s) => s.setTtsMode);
+  const csNeEngine = useAppStore((s) => s.csNeEngine);
+  const setCsNeEngine = useAppStore((s) => s.setCsNeEngine);
+  const csEnEngine = useAppStore((s) => s.csEnEngine);
+  const setCsEnEngine = useAppStore((s) => s.setCsEnEngine);
+  const csCrossfadeMs = useAppStore((s) => s.csCrossfadeMs);
+  const setCsCrossfadeMs = useAppStore((s) => s.setCsCrossfadeMs);
+
+  const fieldClass =
+    'min-h-9 w-full rounded-md border border-[var(--chrome-border)] bg-[var(--chrome-hover-bg)] px-2 py-1 text-sm text-[var(--chrome-fg)] focus-visible:outline-2 focus-visible:outline-[var(--chrome-accent)]';
+
   return (
     <div className="studio-action-bar overflow-visible relative z-[10]">
       {showOverrides && (
@@ -208,6 +224,43 @@ export default function ActionBar({
               </button>
             ))}
           </div>
+          {ttsMode === 'code_switch' && (
+            <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-3">
+              <label className="flex flex-col gap-1 text-xs text-[var(--chrome-fg-muted)]">
+                {t('clone.cs_ne_backend')}
+                <input
+                  type="text"
+                  className={fieldClass}
+                  value={csNeEngine}
+                  placeholder={t('clone.cs_backend_default')}
+                  onChange={(e) => setCsNeEngine(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-[var(--chrome-fg-muted)]">
+                {t('clone.cs_en_backend')}
+                <input
+                  type="text"
+                  className={fieldClass}
+                  value={csEnEngine}
+                  placeholder={t('clone.cs_backend_default')}
+                  onChange={(e) => setCsEnEngine(e.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-[var(--chrome-fg-muted)]">
+                {t('clone.cs_crossfade')}
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  step={5}
+                  className={fieldClass}
+                  value={csCrossfadeMs || ''}
+                  placeholder={t('clone.cs_backend_default')}
+                  onChange={(e) => setCsCrossfadeMs(Number(e.target.value) || 0)}
+                />
+              </label>
+            </div>
+          )}
         </div>
       )}
 
@@ -227,6 +280,17 @@ export default function ActionBar({
             onChange={([item]) => setLanguage(item.lang)}
           />
         </div>
+        <select
+          aria-label={t('clone.tts_mode')}
+          title={t('clone.tts_mode_hint')}
+          className="min-h-9 flex-none max-w-[180px] rounded-md border border-[var(--chrome-border)] bg-[var(--chrome-hover-bg)] px-2 py-1 text-[0.7rem] text-[var(--chrome-fg)] cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--chrome-accent)]"
+          value={ttsMode}
+          onChange={(e) => setTtsMode(e.target.value)}
+        >
+          <option value="auto">{t('clone.tts_mode_auto')}</option>
+          <option value="single">{t('clone.tts_mode_single')}</option>
+          <option value="code_switch">{t('clone.tts_mode_mixed')}</option>
+        </select>
         <button
           type="button"
           className="inline-flex min-h-9 items-center gap-[4px] px-[10px] py-[4px] text-[0.7rem] text-[var(--chrome-fg-muted)] bg-transparent border border-transparent rounded-md cursor-pointer whitespace-nowrap flex-none transition-[color,border-color] duration-[var(--dur-fast)] hover:text-[var(--chrome-fg)] hover:bg-[var(--chrome-hover-bg)] focus-visible:[outline:2px_solid_var(--chrome-accent)] focus-visible:[outline-offset:1px]"

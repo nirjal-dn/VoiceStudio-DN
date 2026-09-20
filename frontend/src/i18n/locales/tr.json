@@ -662,7 +662,16 @@
     "accent_dialect_hint": "yalnızca biri, asla ikisi birden",
     "reset_to_description": "Açıklamaya göre sıfırla",
     "chips_more": "{{count}} tane daha…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS modu",
+    "tts_mode_auto": "Otomatik",
+    "tts_mode_single": "Tek dil",
+    "tts_mode_mixed": "Nepalce + İngilizce karışık",
+    "tts_mode_hint": "Otomatik mod, Nepalce ile İngilizcenin karıştığı metni iki motora bölüştürür; tek dilli metin değişmez.",
+    "cs_ne_backend": "Nepalce motoru",
+    "cs_en_backend": "İngilizce motoru",
+    "cs_crossfade": "Geçişte çapraz geçiş",
+    "cs_backend_default": "Varsayılan"
   },
   "about": {
     "app": "Uygulama",

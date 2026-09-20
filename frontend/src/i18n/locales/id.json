@@ -662,7 +662,16 @@
     "accent_dialect_hint": "salah satu saja, tidak keduanya",
     "reset_to_description": "Setel ulang sesuai deskripsi",
     "chips_more": "{{count}} lainnya…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "Mode TTS",
+    "tts_mode_auto": "Otomatis",
+    "tts_mode_single": "Satu bahasa",
+    "tts_mode_mixed": "Campuran Nepal + Inggris",
+    "tts_mode_hint": "Mode otomatis membagi teks campuran Nepal-Inggris ke dua mesin; teks satu bahasa tidak berubah.",
+    "cs_ne_backend": "Mesin Nepal",
+    "cs_en_backend": "Mesin Inggris",
+    "cs_crossfade": "Crossfade batas",
+    "cs_backend_default": "Bawaan"
   },
   "about": {
     "app": "Aplikasi",

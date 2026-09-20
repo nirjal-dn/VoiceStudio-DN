@@ -1,8 +1,12 @@
-"""xtts-nepali sidecar entry point.
+"""xtts-nepali / xtts-en sidecar entry point.
 
-Runs Coqui XTTS v2 with the Oshara Nepali fine-tune under the engine's own venv
-(coqui-tts + transformers 4.57). Wire protocol, fd handling and heartbeats
-mirror engines/pockettts/main.py::
+Runs Coqui XTTS v2 under the engine's own venv (coqui-tts + transformers 4.57):
+the Oshara Nepali fine-tune by default, or the BASE XTTS v2 checkpoint when
+``OMNIVOICE_XTTS_VARIANT=en`` (the ``xtts-en`` engine, which the code-switch
+service renders English spans with). The English variant reads its knobs from
+``OMNIVOICE_XTTS_EN_*`` instead of ``OMNIVOICE_XTTS_NEPALI_*`` and skips the
+Nepali tokenizer shim and text normalization. Wire protocol, fd handling and
+heartbeats mirror engines/pockettts/main.py::
 
     [ 4-byte big-endian uint32 length ][ N bytes UTF-8 JSON ]
 
@@ -65,17 +69,39 @@ MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 XTTS_SAMPLE_RATE = 24_000
 
-_REPO_ID = "Oshara/xtts-v2-nepali"
-#: Reviewed immutable revision; kept equal to services/hf_revisions.py (tested).
-_REVISION = "1ef72e4a13e201409a895ef45c36b38adbe324d8"
-_CHECKPOINT = os.environ.get("OMNIVOICE_XTTS_NEPALI_CHECKPOINT", "epoch-20").strip()
-_NE_ROUTE = os.environ.get("OMNIVOICE_XTTS_NEPALI_ROUTE", "hi").strip().lower()
+# One sidecar script, two engines. ``OMNIVOICE_XTTS_VARIANT=en`` (set per
+# process by XttsEnglishBackend.sidecar_env(), never inherited) runs the same
+# coqui-tts venv against the BASE XTTS v2 checkpoint, which is what the
+# code-switch service renders English spans with: same architecture as the
+# Nepali fine-tune, so one reference clip still sounds like one speaker across
+# a language boundary. Unset (the default) is the Nepali engine, byte-identical
+# to its previous behavior including every OMNIVOICE_XTTS_NEPALI_* knob.
+_VARIANT = os.environ.get("OMNIVOICE_XTTS_VARIANT", "nepali").strip().lower()
+_IS_ENGLISH = _VARIANT in ("en", "english")
+_ENGINE_ID = "xtts-en" if _IS_ENGLISH else "xtts-nepali"
+_ENV_PREFIX = "OMNIVOICE_XTTS_EN_" if _IS_ENGLISH else "OMNIVOICE_XTTS_NEPALI_"
+
+
+def _env(name: str, default: str = "") -> str:
+    """This variant's knob, e.g. ``OMNIVOICE_XTTS_EN_DEVICE``."""
+    return os.environ.get(_ENV_PREFIX + name, default).strip()
+
+
+_REPO_ID = "coqui/XTTS-v2" if _IS_ENGLISH else "Oshara/xtts-v2-nepali"
+#: Reviewed immutable revisions; kept equal to services/hf_revisions.py (tested).
+_REVISION = ("6c2b0d75eae4b7047358e3b6bd9325f857d43f77" if _IS_ENGLISH
+             else "1ef72e4a13e201409a895ef45c36b38adbe324d8")
+#: Subfolder holding the checkpoint. The Oshara repo ships one per epoch; the
+#: base repo keeps its files at the root, so English downloads by file list.
+_CHECKPOINT = "" if _IS_ENGLISH else (_env("CHECKPOINT") or "epoch-20")
+_BASE_FILES = ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth")
+_NE_ROUTE = (_env("ROUTE") or "hi").lower()
 
 #: Sampling defaults tuned for a natural, conversational delivery (see docstring).
-_TEMPERATURE = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TEMPERATURE", "0.7"))
-_REPETITION_PENALTY = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY", "10.0"))
-_TOP_K = int(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_K", "50"))
-_TOP_P = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_P", "0.85"))
+_TEMPERATURE = float(_env("TEMPERATURE") or "0.7")
+_REPETITION_PENALTY = float(_env("REPETITION_PENALTY") or "10.0")
+_TOP_K = int(_env("TOP_K") or "50")
+_TOP_P = float(_env("TOP_P") or "0.85")
 
 #: Silence between split pieces, in seconds.
 _GAP_S = 0.2
@@ -223,7 +249,7 @@ class _Heartbeat:
 def _device() -> str:
     import torch
 
-    wanted = os.environ.get("OMNIVOICE_XTTS_NEPALI_DEVICE", "").strip().lower()
+    wanted = _env("DEVICE").lower()
     if wanted:
         return wanted
     return "cuda" if torch.cuda.is_available() else "cpu"
@@ -268,14 +294,15 @@ def _load_model(stdout):
         from TTS.tts.configs.xtts_config import XttsConfig  # noqa: PLC0415
         from TTS.tts.models.xtts import Xtts  # noqa: PLC0415
 
-        model_dir = os.environ.get("OMNIVOICE_XTTS_NEPALI_MODEL_DIR", "").strip()
+        model_dir = _env("MODEL_DIR")
         if not model_dir:
             from huggingface_hub import snapshot_download  # noqa: PLC0415
 
+            patterns = [f"{_CHECKPOINT}/*"] if _CHECKPOINT else list(_BASE_FILES)
             root = snapshot_download(
-                _REPO_ID, revision=_REVISION, allow_patterns=[f"{_CHECKPOINT}/*"]
+                _REPO_ID, revision=_REVISION, allow_patterns=patterns
             )
-            model_dir = os.path.join(root, _CHECKPOINT)
+            model_dir = os.path.join(root, _CHECKPOINT) if _CHECKPOINT else root
 
         config = XttsConfig()
         config.load_json(os.path.join(model_dir, "config.json"))
@@ -287,19 +314,27 @@ def _load_model(stdout):
         )
         model.to(_device())
         _patch_reference_audio_loader()
-        _patch_nepali_tokenizer(model.tokenizer)
+        if not _IS_ENGLISH:
+            # The base checkpoint has no ``ne`` in its config; only the
+            # fine-tune needs the Hindi-cleaner shim.
+            _patch_nepali_tokenizer(model.tokenizer)
         _MODEL = model
     return model
 
 
+#: Language assumed when the caller says nothing — this variant's own.
+_DEFAULT_LANGUAGE = "en" if _IS_ENGLISH else "ne"
+
+
 def _xtts_language(raw, supported) -> str:
-    """Map the app's language value to an XTTS code. Empty/auto means Nepali;
-    a specific unsupported language raises instead of mispronouncing."""
+    """Map the app's language value to an XTTS code. Empty/auto means this
+    engine's own language; a specific unsupported language raises instead of
+    mispronouncing."""
     if not raw:
-        return "ne"
+        return _DEFAULT_LANGUAGE
     s = str(raw).strip().lower()
     if s in ("", "auto", "multi", "na"):
-        return "ne"
+        return _DEFAULT_LANGUAGE
     s = _LANG_ALIASES.get(s, s)
     if s in supported:
         return s
@@ -308,7 +343,7 @@ def _xtts_language(raw, supported) -> str:
     if base in supported:
         return base
     raise ValueError(
-        f"XTTS Nepali does not support language {raw!r}; supported: {', '.join(supported)}."
+        f"{_ENGINE_ID} does not support language {raw!r}; supported: {', '.join(supported)}."
     )
 
 
@@ -345,7 +380,7 @@ def _voice_latents(model, ref_audio):
         return latents
 
     speakers = model.speaker_manager.speakers if model.speaker_manager else {}
-    name = os.environ.get("OMNIVOICE_XTTS_NEPALI_SPEAKER", "").strip() or next(iter(speakers), None)
+    name = _env("SPEAKER") or next(iter(speakers), None)
     if not name or name not in speakers:
         raise ValueError(
             "No reference clip given and no built-in speaker found; pick a voice to clone."
@@ -493,7 +528,7 @@ def main() -> int:
     os.dup2(2, 1)
     stdout = os.fdopen(_frame_fd, "wb")
 
-    _send(stdout, {"op": "ready", "engine": "xtts-nepali", "sample_rate": XTTS_SAMPLE_RATE})
+    _send(stdout, {"op": "ready", "engine": _ENGINE_ID, "sample_rate": XTTS_SAMPLE_RATE})
 
     while True:
         try:

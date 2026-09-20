@@ -150,6 +150,15 @@ export default function useTTS({ selectedProfile, setSelectedProfile, loadHistor
       formData.append('layer_penalty_factor', layerPenalty);
       formData.append('postprocess_output', postprocess);
       if (duration) formData.append('duration', parseFloat(duration));
+      // Mixed Nepali/English routing. Read at click time (not a hook dep) so
+      // flipping the mode never re-creates this callback.
+      const { ttsMode, csNeEngine, csEnEngine, csCrossfadeMs } = useAppStore.getState();
+      formData.append('tts_mode', ttsMode || 'auto');
+      if (ttsMode === 'code_switch') {
+        if (csNeEngine?.trim()) formData.append('code_switch_ne_engine', csNeEngine.trim());
+        if (csEnEngine?.trim()) formData.append('code_switch_en_engine', csEnEngine.trim());
+        if (csCrossfadeMs > 0) formData.append('code_switch_crossfade_ms', csCrossfadeMs);
+      }
 
       if (defineMethod === 'audio') {
         if (selectedProfile) {

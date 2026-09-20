@@ -43,6 +43,18 @@ vi.mock('react-hot-toast', () => ({ toast }));
 
 import TranscriptionsPage, { addTranscription, segTimeRange } from './Transcriptions';
 
+// The redesigned workspace renders a transcript twice — once as a row in the
+// list and once in the detail pane, because the first entry is auto-selected.
+// Every query that means "the row the user clicks" says so, instead of
+// `getByText` throwing on the (correct) duplicate.
+const rowFor = (matches) => {
+  const row = matches.find((el) => el.closest('.txn-list'));
+  if (!row) throw new Error(`no list row rendered for: ${matches[0]?.textContent}`);
+  return row;
+};
+const listRow = (text) => rowFor(screen.getAllByText(text));
+const findListRow = async (text) => rowFor(await screen.findAllByText(text));
+
 describe('Transcriptions capture entry point', () => {
   beforeEach(() => {
     readiness.phase = 'ready';
@@ -80,8 +92,8 @@ describe('Transcriptions capture entry point', () => {
     });
 
     const button = screen.getByRole('button', { name: 'Start dictation' });
-    expect(button.querySelector(':scope > svg')).toBeInTheDocument();
-    expect(button.querySelector(':scope > span')).toHaveTextContent('Start dictation');
+    expect(button.querySelector('svg')).toBeInTheDocument();
+    expect(button).toHaveTextContent('Start dictation');
     expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
   });
 
@@ -91,8 +103,8 @@ describe('Transcriptions capture entry point', () => {
 
     const button = screen.getByRole('button', { name: 'Start dictation' });
     expect(button.closest('.txn-header__right')).toBeInTheDocument();
-    expect(button.querySelector(':scope > svg')).toBeInTheDocument();
-    expect(button.querySelector(':scope > span')).toHaveTextContent('Start dictation');
+    expect(button.querySelector('svg')).toBeInTheDocument();
+    expect(button).toHaveTextContent('Start dictation');
     expect(screen.queryByText('No transcriptions yet')).not.toBeInTheDocument();
   });
 
@@ -102,7 +114,7 @@ describe('Transcriptions capture entry point', () => {
       addTranscription({ text: 'The shared capture path works.', language: 'en' });
     });
 
-    expect(await screen.findByText('The shared capture path works.')).toBeInTheDocument();
+    expect(await findListRow('The shared capture path works.')).toBeInTheDocument();
   });
 
   it('uploads an audio clip, saves the complete transcript, and selects it', async () => {
@@ -185,7 +197,7 @@ describe('Transcriptions capture entry point', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: 'omni_transcriptions' }));
     });
 
-    expect(await screen.findByText('From the widget window.')).toBeInTheDocument();
+    expect(await findListRow('From the widget window.')).toBeInTheDocument();
   });
 
   it('deleting an entry keeps entries another window added meanwhile', async () => {
@@ -202,7 +214,7 @@ describe('Transcriptions capture entry point', () => {
     });
     localStorage.setItem('omni_transcriptions', JSON.stringify(stored));
 
-    fireEvent.click(await screen.findByText('Old entry to delete.'));
+    fireEvent.click(await findListRow('Old entry to delete.'));
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
 
     const after = JSON.parse(localStorage.getItem('omni_transcriptions'));
@@ -231,7 +243,7 @@ describe('segments without timings (#1798)', () => {
     });
 
     render(<TranscriptionsPage />);
-    fireEvent.click(await screen.findByText('hello from an untimed backend'));
+    fireEvent.click(await findListRow('hello from an untimed backend'));
 
     // The transcript itself must still be readable — this is the regression:
     // before the guard, the null `end` threw and nothing rendered at all.
@@ -263,7 +275,7 @@ describe('transcription clipboard', () => {
   it.each([true, false])('reports clipboard result %s accurately', async (copied) => {
     copyToClipboard.mockResolvedValueOnce(copied);
     render(<TranscriptionsPage />);
-    fireEvent.click(screen.getByText('Copy this transcript.'));
+    fireEvent.click(listRow('Copy this transcript.'));
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('Copy this transcript.'));
     await waitFor(() => expect(copied ? toast.success : toast.error).toHaveBeenCalled());
@@ -273,7 +285,7 @@ describe('transcription clipboard', () => {
   it('reports an unexpected clipboard rejection', async () => {
     copyToClipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
     render(<TranscriptionsPage />);
-    fireEvent.click(screen.getByText('Copy this transcript.'));
+    fireEvent.click(listRow('Copy this transcript.'));
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalled();

@@ -2279,6 +2279,10 @@ _LAZY_REGISTRY: dict[str, tuple[str, str]] = {
     # Local try-out: Coqui XTTS v2 + Oshara Nepali fine-tune, own venv
     # (coqui-tts pins transformers 4.57). CPML weights are non-commercial.
     "xtts-nepali": ("engines.xtts_nepali", "XttsNepaliBackend"),
+    # Base Coqui XTTS v2 in the same sidecar/venv as the Nepali fine-tune. The
+    # English half of a code-switched Nepali/English render (see
+    # services/code_switch_tts.py), and a standalone English cloning engine.
+    "xtts-en": ("engines.xtts_en", "XttsEnglishBackend"),
     # AI4Bharat Indic Parler-TTS (Nepali + 20 languages), own venv: parler-tts
     # pins transformers 4.46.1.
     "indic-parler-tts": ("engines.indic_parler", "IndicParlerBackend"),
@@ -2499,6 +2503,7 @@ _INSTALL_HINTS: dict[str, str] = {
     "confucius4-tts":"git clone netease-youdao/Confucius4-TTS + set OMNIVOICE_CONFUCIUS4_TTS_DIR  (own Python 3.10 venv; 14-lang cross-lingual zero-shot clone; ~5 GB weights auto-download; CUDA/ROCm/XPU/NPU/CPU, no MPS; Apache-2.0)",
     "audiocpp":     "download the matching audio.cpp v0.7.2 prebuilt + set OMNIVOICE_AUDIOCPP_BIN, then explicitly install Breeze-TTS-2 in the engine's Weights list in Model Catalogue  (native CPU/Vulkan/CUDA/Metal GGUF server, no Python; en+zh clone+design; ~4.73 GiB; weights research/non-commercial only)",
     "xtts-nepali":  "create ~/.omnivoice/engines/xtts-nepali/.venv with coqui-tts==0.27.5 + transformers==4.57.6 (see docs/engines/xtts-nepali.md) or set OMNIVOICE_XTTS_NEPALI_DIR  (own venv; Oshara XTTS v2 Nepali fine-tune, ~1.9 GB weights on first use; CUDA/CPU; CPML non-commercial weights)",
+    "xtts-en":      "reuses the xtts-nepali venv (coqui-tts==0.27.5 + transformers==4.57.6, see docs/engines/xtts-en.md) or set OMNIVOICE_XTTS_EN_DIR  (own venv; base Coqui XTTS v2, ~1.9 GB weights on first use; CUDA/CPU; CPML non-commercial weights)",
     "indic-parler-tts": "create ~/.omnivoice/engines/indic-parler/.venv with parler-tts (see docs/engines/indic-parler-tts.md) or set OMNIVOICE_INDIC_PARLER_DIR  (own venv; 21 Indic langs incl. Nepali, voice by description; HF-gated ~3.8 GB weights, set HF_TOKEN; CUDA/CPU; Apache-2.0)",
 }
 
@@ -2548,6 +2553,7 @@ _ENGINE_DOCS: dict[str, str] = {
     "pockettts":            "docs/engines/pockettts.md",
     "audiocpp":             "docs/engines/audio-cpp.md",
     "xtts-nepali":          "docs/engines/xtts-nepali.md",
+    "xtts-en":              "docs/engines/xtts-en.md",
     "indic-parler-tts":     "docs/engines/indic-parler-tts.md",
     "auto-lang":            "docs/engines/auto-lang.md",
 }

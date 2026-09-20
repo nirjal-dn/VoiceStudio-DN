@@ -54,6 +54,18 @@ models:
       - "epoch-20/*"
     note: "Weights inherit the Coqui Public Model License: non-commercial use only. The engine also needs its own venv (see docs/engines/xtts-nepali.md)."
 
+  - repo_id: "coqui/XTTS-v2"
+    label: "XTTS v2 (Coqui base — English half of Nepali+English mixed speech)"
+    role: TTS
+    engines: [xtts-en]
+    size_gb: 1.9
+    allow_patterns:
+      - "config.json"
+      - "model.pth"
+      - "vocab.json"
+      - "speakers_xtts.pth"
+    note: "Weights inherit the Coqui Public Model License: non-commercial use only. Shares the xtts-nepali venv (see docs/engines/xtts-en.md)."
+
   - repo_id: "ai4bharat/indic-parler-tts"
     label: "Indic Parler-TTS (Nepali + 20 Indian languages, voice by description)"
     role: TTS

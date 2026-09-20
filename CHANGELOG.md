@@ -15,16 +15,16 @@ the frozen-backend fallback mirror it for their toolchains.
 - MOSS-TTS-Nano installs in one click into its own environment, pinned to a reviewed upstream commit it works with (#2022)
 - CosyVoice 3 installs in one click into its own environment, with a trimmed dependency set that needs no TensorRT, DeepSpeed or third-party package feed (#2025)
 - New `auto-lang` engines route by language automatically — dictate/speak Nepali and English in one conversation with no manual engine switching
+- Mixed Nepali + English sentences are spoken by two engines in one voice — Nepali words by the Nepali model, English words by base XTTS v2
 
 ### Added
 
-- `auto-lang` ASR: Whisper transcribes and detects the language; Nepali re-routes to IndicConformer (Devanagari-native), everything else stays single-pass Whisper
-- `auto-lang` TTS: Devanagari text routes to the Nepali engine (Oshara/XTTS), everything else to VoiceStudio/OmniVoice — per line, so mixed batches route each line
-- **Nepali + English (Auto)** transcription mode (`ne-en-router`): splits speech into segments, detects Nepali vs English per segment (restricted to those two, with hysteresis so uncertain segments don't flap), and routes each — Nepali → IndicConformer (Devanagari), English → Whisper large-v2 (Latin) — then merges by timestamp. No manual model switching; per-segment model choice is logged. See [docs/engines/ne-en-router.md](docs/engines/ne-en-router.md)
-- `whisper-ne-en` ASR: Whisper large-v3 tuned for Nepali↔English code-switched speech — transcribes a mixed sentence (`नमस्ते, मेरो account को balance कति छ?`) as one complete transcript in a single pass, Nepali in Devanagari and English in Latin. Detection is Nepali-biased (Hindi/Sanskrit scores count as evidence *for* Nepali, never decoded as Hindi), so Nepali survives even when English dominates the audio; only genuinely English-only clips decode as English (no extra install; reuses faster-whisper). Best for code-switching *within* one sentence; for utterance-level alternation use Nepali + English (Auto) above Detection is Nepali-biased (Hindi/Sanskrit scores count as evidence *for* Nepali, never decoded as Hindi), so Nepali survives even when English dominates the audio; only genuinely English-only clips decode as English (no extra install; reuses faster-whisper)
-
-### Added
-
+- **TTS mode** (Automatic / Single language / Nepali + English mixed): mixed text is split by language, each span voiced by its own engine from one reference clip, then leveled and crossfaded — see [docs/nepali.md](docs/nepali.md#nepali--english-mixed-speech)
+- **`xtts-en` engine**: base Coqui XTTS v2 inside the existing xtts-nepali sidecar, nothing extra to install (non-commercial weights)
+- **`auto-lang` ASR**: Whisper detects the language; Nepali re-routes to IndicConformer (Devanagari-native), everything else stays single-pass Whisper
+- **`auto-lang` TTS**: Devanagari lines route to the Nepali engine, everything else to OmniVoice — per line, so mixed batches route each line
+- **Nepali + English (Auto)** transcription (`ne-en-router`): per-segment language detection routes Nepali to IndicConformer and English to Whisper, merged by timestamp — see [docs/engines/ne-en-router.md](docs/engines/ne-en-router.md)
+- **`whisper-ne-en` ASR**: Whisper large-v3 tuned for code-switched speech — one mixed sentence becomes one transcript, Nepali in Devanagari and English in Latin
 - XTTS v2 Nepali engine (Oshara fine-tune) for Nepali speech and voice cloning, in its own environment; weights are non-commercial — thanks @nirjal-dn!
 - IndicConformer speech recognition for Nepali and 21 other Indian languages, including whole-recording dictation — thanks @nirjal-dn!
 - Indic Parler-TTS engine: Nepali and 20 other Indian languages, with the voice chosen by a text description — thanks @nirjal-dn!

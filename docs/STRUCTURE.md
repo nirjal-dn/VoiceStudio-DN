@@ -39,10 +39,10 @@ VoiceStudio/
 │   │   └── setup/               first-run wizard, model download
 │   ├── core/                    config, db, job queue, event bus, auth/CSRF, path security,
 │   │                            opt-in analytics, version, diagnostics
-│   ├── services/                80 modules of business logic — TTS, dubbing pipeline,
+│   ├── services/                83 modules of business logic — TTS, dubbing pipeline,
 │   │                            audio DSP, GPU gateway, engine routing, model lifecycle
 │   ├── engines/                 per-engine adapters: indextts, supertonic3, confucius4, dots_tts,
-│   │                            moss_tts_v15, pockettts, audiocpp, xtts_nepali, indic_parler, indic_conformer,
+│   │                            moss_tts_v15, pockettts, audiocpp, xtts_nepali, xtts_en, indic_parler, indic_conformer,
 │   │                            omnivoice_gguf, omnivoice_subprocess, _asr_sidecar, _echo, voxcpm2_subprocess,
 │   │                            moss_tts_nano_subprocess, cosyvoice_subprocess
 │   ├── worker/                  remote / distributed workers — scheduler, pool, routing,

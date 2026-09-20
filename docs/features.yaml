@@ -64,8 +64,12 @@ tts_engines:
     doc: docs/engines/audio-cpp.md
   - id: xtts-nepali
     doc: docs/engines/xtts-nepali.md
+  - id: xtts-en
+    doc: docs/engines/xtts-en.md
   - id: indic-parler-tts
     doc: docs/engines/indic-parler-tts.md
+  - id: auto-lang
+    doc: docs/engines/auto-lang.md
 
 # Same contract against backend/services/asr_backend.py _REGISTRY.
 asr_engines:
@@ -89,6 +93,12 @@ asr_engines:
     readme: "**sherpa-onnx** (live dictation)"
   - id: openai-compat-asr
     readme: "**OpenAI-compatible** ⚠️ configured server"
+  - id: auto-lang
+    doc: docs/engines/auto-lang.md
+  - id: ne-en-router
+    doc: docs/engines/ne-en-router.md
+  - id: whisper-ne-en
+    doc: docs/engines/whisper-ne-en.md
 
 # Doc files that must exist (the install path users are sent to).
 docs:

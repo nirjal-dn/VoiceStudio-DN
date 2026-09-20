@@ -662,7 +662,16 @@
     "accent_dialect_hint": "det ena eller det andra, aldrig båda",
     "reset_to_description": "Återställ till beskrivning",
     "chips_more": "{{count}} till…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS-läge",
+    "tts_mode_auto": "Automatiskt",
+    "tts_mode_single": "Ett språk",
+    "tts_mode_mixed": "Nepali + engelska blandat",
+    "tts_mode_hint": "Automatiskt delar blandad nepali-engelsk text mellan två motorer; enspråkig text är oförändrad.",
+    "cs_ne_backend": "Nepalimotor",
+    "cs_en_backend": "Engelsk motor",
+    "cs_crossfade": "Övertoning vid gränsen",
+    "cs_backend_default": "Standard"
   },
   "about": {
     "app": "App",

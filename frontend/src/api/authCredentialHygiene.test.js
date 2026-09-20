@@ -82,9 +82,12 @@ describe('administrator credential hygiene static guard', () => {
   });
 
   it('keeps every WebSocket consumer behind the authenticated URL boundary', () => {
+    // Sorted: the glob's order is filesystem-dependent, and what this guards
+    // is that every consumer is authenticated — not which one is found first.
     const constructors = sources()
       .filter(({ source }) => source.includes('new WebSocket('))
-      .map(({ file, source }) => ({ file, authenticated: source.includes('authenticatedWsUrl') }));
+      .map(({ file, source }) => ({ file, authenticated: source.includes('authenticatedWsUrl') }))
+      .sort((a, b) => a.file.localeCompare(b.file));
 
     expect(constructors).toEqual([
       { file: 'components/CaptureWidget.jsx', authenticated: true },

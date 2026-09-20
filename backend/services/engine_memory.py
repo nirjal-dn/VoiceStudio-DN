@@ -34,8 +34,8 @@ def single_engine_resident() -> bool:
             not in _OFF)
 
 
-def _evict_instance_cache(keep_cls) -> list[str]:
-    """Unload + drop every cached engine instance except ``keep_cls``.
+def _evict_instance_cache(keep_classes) -> list[str]:
+    """Unload + drop every cached engine instance except ``keep_classes``.
 
     Operates on the per-request instance cache the generate path shares with the
     engine health route (``engines._ENGINE_INSTANCES``). Each engine's
@@ -48,7 +48,7 @@ def _evict_instance_cache(keep_cls) -> list[str]:
     except Exception:  # pragma: no cover — router import should always succeed
         return evicted
     for cls, inst in list(_ENGINE_INSTANCES.items()):
-        if cls is keep_cls:
+        if cls in keep_classes:
             continue
         if _engine_busy(cls, inst):
             # Unloading mid-job kills a generating sidecar or frees weights a
@@ -81,8 +81,13 @@ def _engine_busy(cls, inst) -> bool:
     return bool(locked()) if callable(locked) else False
 
 
-async def evict_other_tts_engines(keep_id: str) -> list[str]:
+async def evict_other_tts_engines(keep_id) -> list[str]:
     """Unload every resident TTS engine except ``keep_id`` and return their ids.
+
+    ``keep_id`` may be one engine id or several. A code-switched render
+    (services/code_switch_tts.py) deliberately keeps two engines resident for
+    the length of one request, so evicting "everything but one" would unload a
+    model that request is about to use — and reload it on every generate.
 
     Spans both stores a TTS model can live in: the VoiceStudio core singleton
     (``model_manager.model``, freed under its async lock when we're switching
@@ -92,10 +97,11 @@ async def evict_other_tts_engines(keep_id: str) -> list[str]:
     if not single_engine_resident():
         return []
 
+    keep_ids = [keep_id] if isinstance(keep_id, str) else [k for k in keep_id if k]
     evicted: list[str] = []
 
     # The VoiceStudio core singleton — only when the incoming engine isn't it.
-    if keep_id != "omnivoice":
+    if "omnivoice" not in keep_ids:
         try:
             import services.model_manager as mm
 
@@ -106,17 +112,19 @@ async def evict_other_tts_engines(keep_id: str) -> list[str]:
             logger.warning("evict: VoiceStudio core unload failed", exc_info=True)
 
     # Every other in-process / sidecar engine instance.
-    keep_cls = None
-    try:
-        from services.tts_backend import get_backend_class
+    keep_classes = set()
+    for engine_id in keep_ids:
+        try:
+            from services.tts_backend import get_backend_class
 
-        keep_cls = get_backend_class(keep_id)
-    except Exception:  # noqa: BLE001 — unknown id → evict all cached instances
-        keep_cls = None
+            keep_classes.add(get_backend_class(engine_id))
+        except Exception:  # noqa: BLE001 — unknown id → nothing to keep for it
+            continue
     # unload() can wait seconds on a sidecar exit or a gc/empty_cache pass;
     # keep that off the event loop.
-    evicted.extend(await asyncio.to_thread(_evict_instance_cache, keep_cls))
+    evicted.extend(await asyncio.to_thread(_evict_instance_cache, keep_classes))
 
     if evicted:
-        logger.info("single-engine eviction: freed %s (keeping %s)", log_safe(evicted), log_safe(keep_id))
+        logger.info("single-engine eviction: freed %s (keeping %s)",
+                    log_safe(evicted), log_safe(keep_ids))
     return evicted

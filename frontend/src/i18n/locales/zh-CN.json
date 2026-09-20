@@ -307,7 +307,16 @@
     "accent_dialect_hint": "二选一，不能同时选择",
     "reset_to_description": "按描述重置",
     "chips_more": "还有 {{count}} 个…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "TTS 模式",
+    "tts_mode_auto": "自动",
+    "tts_mode_single": "单一语言",
+    "tts_mode_mixed": "尼泊尔语 + 英语混合",
+    "tts_mode_hint": "自动模式会把尼泊尔语与英语混排的文本分给两个引擎；单一语言的文本保持不变。",
+    "cs_ne_backend": "尼泊尔语引擎",
+    "cs_en_backend": "英语引擎",
+    "cs_crossfade": "衔接处交叉淡化",
+    "cs_backend_default": "默认"
   },
   "settings": {
     "remote_backend_test": "测试连接",

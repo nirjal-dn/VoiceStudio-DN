@@ -1033,6 +1033,45 @@ def _run_backend_inference(
         _in_use.__exit__(None, None, None)
 
 
+def _run_code_switch_inference(
+    service, text, language, ref_audio_path, ref_text, speed, used_seed,
+    effect_preset="broadcast",
+):
+    """Mixed-language twin of :func:`_run_backend_inference`.
+
+    The service owns segmentation, per-span routing and stitching; this wrapper
+    only supplies the request's voice and puts the stitched take through the
+    same effect/mastering chain every other take gets. Runs on the GPU pool,
+    like both single-engine paths.
+
+    ``[pause Nms]`` markers and the long-text chunker do not apply here: the
+    text is already split by language, and splitting it twice would cut spans
+    at boundaries the segmenter deliberately kept together.
+    """
+    import torch
+
+    from services.code_switch_tts import CodeSwitchError
+
+    try:
+        if used_seed is not None:
+            torch.manual_seed(used_seed)
+        mode = "auto"
+        if language and language.lower() not in ("", "auto"):
+            mode = language
+        audio_out, sample_rate = service.generate(
+            text, ref_audio=ref_audio_path, ref_text=ref_text, speed=speed,
+            language_mode=mode,
+        )
+        return _apply_effect_chain(
+            audio_out, sample_rate, effect_preset,
+            skip_mastering=service.applies_own_mastering,
+        )
+    except (CodeSwitchError, ValueError) as e:
+        raise e
+    except Exception as e:
+        _oom_friendly_reraise(e)
+
+
 # #1257: the language picker offers all 646 languages regardless of engine,
 # because MLXAudioBackend.supported_languages() returns ["multi"] on the stated
 # assumption that "each engine silently ignores languages it doesn't know".
@@ -1430,6 +1469,29 @@ def _apply_routing_headers(headers, engine_notice, decision):
     return headers
 
 
+def _apply_code_switch_headers(headers, service, notice):
+    """Say which language routing a take actually got.
+
+    ``auto`` falls back to single-engine rendering when the English backend
+    is not usable — a working take, but not the one that was asked for, so the
+    reason rides the header channel instead of disappearing into a log.
+    """
+    from services.engine_routing import header_safe_reason
+    from services.language_segmenter import ENGLISH, NEPALI
+
+    if service is not None:
+        headers["X-OmniVoice-TTS-Mode"] = "code_switch"
+        headers["X-OmniVoice-Code-Switch"] = (
+            f"{service.engine_id_for(NEPALI)}+{service.engine_id_for(ENGLISH)}"
+        )
+    else:
+        headers["X-OmniVoice-TTS-Mode"] = "single"
+        reason = header_safe_reason(notice or "")
+        if reason:
+            headers["X-OmniVoice-Code-Switch"] = f"unavailable: {reason}"
+    return headers
+
+
 @router.post("/generate")
 async def generate_speech(
     text: str = Form(...),
@@ -1451,6 +1513,18 @@ async def generate_speech(
     seed: Optional[int] = Form(None),
     effect_preset: str = Form("broadcast"),
     engine: Optional[str] = Form(None),
+    # Mixed Nepali/English routing. "single" is the historical behavior (one
+    # engine renders the whole text); "code_switch" always splits the text by
+    # language and renders each span on its own engine; "auto" (the default)
+    # does that ONLY for text that really is mixed, so pure-Nepali and
+    # pure-English requests take the unchanged single-engine path.
+    tts_mode: str = Form("auto"),
+    # Per-request overrides of the configured code-switch children, same shape
+    # as the `engine` override above: omitted means "use the configured
+    # default" (env var > prefs > built-in).
+    code_switch_ne_engine: Optional[str] = Form(None),
+    code_switch_en_engine: Optional[str] = Form(None),
+    code_switch_crossfade_ms: Optional[int] = Form(None, ge=0, le=500),
     # Wave 1.2 — unlimited-length generation: long text is split at sentence
     # boundaries and crossfaded. 0 disables chunking (whole text to engine).
     max_chunk_chars: int = Form(800, ge=0),
@@ -1521,9 +1595,73 @@ async def generate_speech(
     _remote = bool(getattr(_decision, "remote", False))
     _target_label = getattr(_decision, "label", "") or "the chosen worker"
 
+    # ── Mixed Nepali/English routing (tts_mode) ─────────────────────────────
+    # Resolved here, before anything is loaded, because it decides WHICH
+    # engines this request warms: a code-switched render keeps two children
+    # resident and never touches the globally active backend.
+    _cs_mode = (tts_mode or "auto").strip().lower()
+    if _cs_mode not in ("auto", "single", "code_switch"):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Unknown tts_mode {_cs_mode!r}. Valid values: "
+                    "auto, single, code_switch."),
+        )
+    _code_switch = None
+    _code_switch_notice = None
+    if _cs_mode != "single":
+        from services.code_switch_tts import (
+            CodeSwitchConfig, CodeSwitchError, CodeSwitchTTSService,
+            code_switch_enabled, should_code_switch,
+        )
+        if _cs_mode == "code_switch" and not code_switch_enabled():
+            raise HTTPException(
+                status_code=400,
+                detail=("Mixed-language synthesis is turned off "
+                        "(OMNIVOICE_CODE_SWITCH_ENABLED=0). Turn it on, or use "
+                        "tts_mode=single."),
+            )
+        # A remote worker renders through its own single-engine protocol, which
+        # carries no per-span routing — so code-switching is a local-render
+        # feature and says so rather than silently mis-rendering there.
+        _wants_cs = _cs_mode == "code_switch" or should_code_switch(text)
+        _cs_config = CodeSwitchConfig.from_prefs()
+        if code_switch_ne_engine:
+            _cs_config.nepali_engine = code_switch_ne_engine.strip()
+        if code_switch_en_engine:
+            _cs_config.english_engine = code_switch_en_engine.strip()
+        if code_switch_crossfade_ms is not None:
+            _cs_config.crossfade_ms = code_switch_crossfade_ms
+        if _wants_cs and _remote:
+            _code_switch_notice = (
+                f"rendered on {_target_label}, which renders with a single engine"
+            )
+        elif _wants_cs:
+            try:
+                _candidate = CodeSwitchTTSService(_cs_config)
+                _candidate.validate()
+                _code_switch = _candidate
+            except CodeSwitchError as exc:
+                if _cs_mode == "code_switch":
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                # auto: the single-engine path still produces a take, so fall
+                # back to it — but never silently (#3 of the feature spec):
+                # the response header says the English half was not routed.
+                _code_switch_notice = str(exc)
+                logger.warning(
+                    "code-switch unavailable, falling back to '%s': %s",
+                    engine_id, exc,
+                )
+
     _model = None
     _backend = None
-    _engine_min_vram_gb = getattr(backend_cls, "min_vram_gb", 0.0)
+    # What actually renders: for a code-switched take that is the Nepali child,
+    # not the machine's configured engine (which this request never loads).
+    _render_cls = backend_cls
+    if _code_switch is not None:
+        from services.language_segmenter import NEPALI
+
+        _render_cls = get_backend_class(_code_switch.engine_id_for(NEPALI))
+    _engine_min_vram_gb = getattr(_render_cls, "min_vram_gb", 0.0)
     _routing_notice = None
     # Remote renders deliberately skip this host's capability gate. Keep the
     # local fallback call's timeout device-neutral so the closure is valid
@@ -1541,7 +1679,15 @@ async def generate_speech(
         # is resident, so steady-state single-engine use pays nothing. Opt out:
         # OMNIVOICE_SINGLE_ENGINE_RESIDENT=0.
         from services.engine_memory import evict_other_tts_engines
-        await evict_other_tts_engines(engine_id)
+        if _code_switch is not None:
+            from services.language_segmenter import ENGLISH, NEPALI
+
+            await evict_other_tts_engines((
+                _code_switch.engine_id_for(NEPALI),
+                _code_switch.engine_id_for(ENGLISH),
+            ))
+        else:
+            await evict_other_tts_engines(engine_id)
 
         # Non-blocking breadcrumb: if free memory is already low before this
         # load, log it. A later OOM kill (the 16 GB-Mac class) then has a trail
@@ -1558,7 +1704,12 @@ async def generate_speech(
         # VRAM eviction runs in get_model()'s warm-return path now, so every
         # native TTS generate (this route, WS TTS, dub, batch, audiobook) is
         # covered.
-        if backend_cls is OmniVoiceBackend:
+        if _code_switch is not None:
+            # The code-switch children are the engines this request renders on;
+            # loading the configured engine too would put a third model in
+            # memory for nothing.
+            pass
+        elif backend_cls is OmniVoiceBackend:
             # VoiceStudio keeps its native path: it carries the full advanced
             # parameter surface (t_shift, layer/position/class controls) that
             # the generic adapter protocol doesn't. Byte-identical behavior.
@@ -1592,7 +1743,7 @@ async def generate_speech(
             runtime_compute_profile_async,
         )
         _routing = await runtime_compute_profile_async(
-            backend_cls, detect_host_caps()
+            _render_cls, detect_host_caps()
         )
         _engine_min_vram_gb = _routing["min_vram_gb"]
         _routing_hardware_family = _routing.get("runtime_hardware_family")
@@ -1846,6 +1997,7 @@ async def generate_speech(
              "Cache-Control": "no-cache"},
             None, _decision,
         )
+        _apply_code_switch_headers(_remote_headers, None, _code_switch_notice)
 
         _progress_q: asyncio.Queue = asyncio.Queue()
 
@@ -1976,7 +2128,14 @@ async def generate_speech(
 
         _segments = parse_pause_markers(text)
         _has_pause = len(_segments) > 1 or (_segments and _segments[0][1] > 0)
-        _text_chunks = [] if _has_pause else split_text_into_chunks(text, max_chunk_chars)
+        if _code_switch is not None:
+            # A code-switched take is assembled from language spans, not text
+            # chunks, so it streams as one piece (same shape the single-shot
+            # branch below already sends) rather than per-chunk.
+            _has_pause = False
+            _text_chunks = [text]
+        else:
+            _text_chunks = [] if _has_pause else split_text_into_chunks(text, max_chunk_chars)
         # #1330 — see the non-streaming path: chunks the engine rendered to
         # nothing land here so the stream can say the take is missing text
         # instead of quietly handing back a short one.
@@ -2084,7 +2243,29 @@ async def generate_speech(
             try:
                 if _has_pause or len(_text_chunks) <= 1:
                     # Single-shot pipeline, unchanged — streamed as one chunk.
-                    if _backend is not None:
+                    if _code_switch is not None:
+                        audio_tensor = await _run_with_reference_lease(
+                            ref_lease,
+                            lambda release: run_on_gpu_pool_guarded(
+                                functools.partial(
+                                    _run_code_switch_inference,
+                                    _code_switch, text, language, ref_audio_path,
+                                    ref_text, speed, used_seed, effect_preset,
+                                ),
+                                what="TTS generate",
+                                min_vram_gb=_engine_min_vram_gb,
+                                timeout=_generate_timeout_s(
+                                    text,
+                                    execution_device=_routing["effective_device"],
+                                    min_vram_gb=_engine_min_vram_gb,
+                                    hardware_family=_routing_hardware_family,
+                                    vram_gb=_routing_vram_gb,
+                                ),
+                                on_abandon=release,
+                            )
+                        )
+                        sample_rate = _code_switch.target_sample_rate
+                    elif _backend is not None:
                         audio_tensor = await _run_with_reference_lease(
                             ref_lease,
                             lambda release: run_on_gpu_pool_guarded(
@@ -2289,6 +2470,7 @@ async def generate_speech(
             "X-Seed": str(used_seed) if used_seed is not None else "",
             "Cache-Control": "no-cache",
         }, _routing_notice, _decision)
+        _apply_code_switch_headers(_stream_headers, _code_switch, _code_switch_notice)
         return StreamingResponse(
             _stream_events(),
             media_type="application/x-ndjson",
@@ -2312,7 +2494,13 @@ async def generate_speech(
             # lands in run_on_gpu_pool_guarded, so the #730 bound + pool reset
             # that keeps a wedged generate from bricking the backend is
             # unchanged.
-            if _backend is not None:
+            if _code_switch is not None:
+                _local_render = functools.partial(
+                    _run_code_switch_inference,
+                    _code_switch, text, language, ref_audio_path, ref_text,
+                    speed, used_seed, effect_preset,
+                )
+            elif _backend is not None:
                 _local_render = functools.partial(
                     _run_backend_inference,
                     _backend, text, language, ref_audio_path, ref_text, instruct,
@@ -2354,8 +2542,11 @@ async def generate_speech(
             )
             # Read after generation: engines with lazy model loading report
             # their real rate only once weights are up.
-            sample_rate = (_backend.sample_rate if _backend is not None
-                           else _model.sampling_rate)
+            if _code_switch is not None:
+                sample_rate = _code_switch.target_sample_rate
+            else:
+                sample_rate = (_backend.sample_rate if _backend is not None
+                               else _model.sampling_rate)
         # Watermark → save → history → prune → emit, shared with the streaming
         # path (see _finalize_generation) so both flows produce identical takes.
         audio_tensor, _meta = await _finalize_generation(
@@ -2399,6 +2590,7 @@ async def generate_speech(
         # machine this render ran on. The WAV body is binary so the header
         # channel is the carrier.
         _apply_routing_headers(_resp_headers, _routing_notice, _decision)
+        _apply_code_switch_headers(_resp_headers, _code_switch, _code_switch_notice)
         return StreamingResponse(
             _stream_wav(),
             media_type="audio/wav",

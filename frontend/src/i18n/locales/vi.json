@@ -662,7 +662,16 @@
     "accent_dialect_hint": "chỉ một trong hai, không cả hai",
     "reset_to_description": "Đặt lại theo mô tả",
     "chips_more": "{{count}} mục khác…",
-    "cfg": "CFG"
+    "cfg": "CFG",
+    "tts_mode": "Chế độ TTS",
+    "tts_mode_auto": "Tự động",
+    "tts_mode_single": "Một ngôn ngữ",
+    "tts_mode_mixed": "Nepal + Anh xen kẽ",
+    "tts_mode_hint": "Chế độ tự động chia văn bản pha trộn tiếng Nepal và tiếng Anh cho hai engine; văn bản một ngôn ngữ giữ nguyên.",
+    "cs_ne_backend": "Engine tiếng Nepal",
+    "cs_en_backend": "Engine tiếng Anh",
+    "cs_crossfade": "Chuyển tiếp tại ranh giới",
+    "cs_backend_default": "Mặc định"
   },
   "about": {
     "app": "ứng dụng",

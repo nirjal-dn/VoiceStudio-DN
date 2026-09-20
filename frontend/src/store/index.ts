@@ -190,6 +190,10 @@ export const useAppStore = create<AppStore>()(
         font: s.font,
         // Generate-tab prefs — users expect their synthesis knobs to stick.
         language: s.language,
+        ttsMode: s.ttsMode,
+        csNeEngine: s.csNeEngine,
+        csEnEngine: s.csEnEngine,
+        csCrossfadeMs: s.csCrossfadeMs,
         speed: s.speed,
         steps: s.steps,
         cfg: s.cfg,
