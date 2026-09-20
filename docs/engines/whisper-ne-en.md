@@ -39,8 +39,13 @@ recording. This is the recipe validated in the reference notebook
    drift to Hindi. Works for pure Nepali, pure English, and mixed input alike.
 2. **`task="transcribe"`, always.** Never `translate` — neither language is
    rendered into the other.
-3. **Deterministic decoding.** `temperature=0.0` with beam search
-   (`beam_size=best_of=5`) for stable, reproducible dictation.
+3. **Temperature-fallback decoding.** Beam search (`beam_size=best_of=5`) with
+   Whisper's standard fallback ladder (`temperature=[0.0, 0.2, … 1.0]`): the
+   greedy `0.0` pass is kept for clean audio, but a window that fails the quality
+   gates (`compression_ratio_threshold=2.4`, `log_prob_threshold=-1.0`) — the
+   dominant Nepali failure mode, a repetition loop or low-confidence output — is
+   retried at a higher temperature instead of emitting garbage. This is the main
+   Nepali-accuracy knob; set `OMNIVOICE_CS_TEMPERATURE=0.0` to force greedy-only.
 4. **Built-in Silero VAD** (`vad_filter=True`, `min_silence_duration_ms=500`)
    drops non-speech, and `condition_on_previous_text=False` stops one window's
    bias bleeding into the next. The result is **one continuous transcript**
@@ -58,6 +63,7 @@ recording. This is the recipe validated in the reference notebook
 | --- | --- | --- |
 | `OMNIVOICE_CS_LANGUAGE` | `ne` | Whisper decode language. Set `en` to pin English, or any Whisper language code. |
 | `OMNIVOICE_CS_BEAM_SIZE` | `5` | Beam size / `best_of`. Lower (e.g. `1`) is faster on CPU at some accuracy cost. |
+| `OMNIVOICE_CS_TEMPERATURE` | ladder `0.0,0.2,…,1.0` | Decode temperature. A single float (e.g. `0.0`) forces greedy-only; a comma list customises the fallback ladder. |
 | `OMNIVOICE_CS_ASR_MODEL` | `Systran/faster-whisper-large-v3` | The CTranslate2 large-v3 repo to load. |
 
 ## Limits

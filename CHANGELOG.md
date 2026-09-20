@@ -30,6 +30,7 @@ the frozen-backend fallback mirror it for their toolchains.
 
 ### Changed
 
+- `whisper-ne-en` ASR now decodes with Whisper's temperature-fallback ladder (`0.0` first, then `0.2…1.0`) gated by compression-ratio/log-prob checks, so a Nepali window that would collapse into a repetition loop or low-confidence output is retried instead of emitted — improving Nepali accuracy; force greedy-only with `OMNIVOICE_CS_TEMPERATURE=0.0`
 - Nepali numbers, Bikram Sambat and Gregorian dates, times, percentages and phone numbers are spoken as Nepali words by every TTS engine; see docs/nepali.md
 - Long Nepali text is split at the danda, and a forced cut never separates a vowel sign or conjunct from its consonant
 - IndicConformer transcribes in the request's language (Dubbing source, `/transcribe`, voice language) and handles recordings of any length in passes of at most 90 s

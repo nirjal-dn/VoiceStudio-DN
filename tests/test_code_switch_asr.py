@@ -79,16 +79,38 @@ def test_default_language_is_pinned_nepali(monkeypatch):
 
 def test_decoding_uses_notebook_params(monkeypatch):
     monkeypatch.delenv("OMNIVOICE_CS_BEAM_SIZE", raising=False)
+    monkeypatch.delenv("OMNIVOICE_CS_TEMPERATURE", raising=False)
     bk = _backend_with("नमस्ते")
     bk.transcribe("x.wav")
     kw = bk._model.transcribe_kwargs
     assert kw["task"] == "transcribe"            # never translate
-    assert kw["temperature"] == 0.0              # deterministic
+    # Temperature-fallback ladder — 0.0 first (deterministic for clean audio),
+    # higher rungs recover failed Nepali windows.
+    assert kw["temperature"] == (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    assert kw["temperature"][0] == 0.0
+    # Quality gates that actually trigger the fallback.
+    assert kw["compression_ratio_threshold"] == 2.4
+    assert kw["log_prob_threshold"] == -1.0
+    assert kw["no_speech_threshold"] == 0.6
     assert kw["beam_size"] == 5
     assert kw["best_of"] == 5
     assert kw["vad_filter"] is True
     assert kw["vad_parameters"] == {"min_silence_duration_ms": 500}
     assert kw["condition_on_previous_text"] is False
+
+
+def test_temperature_env_forces_greedy(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_TEMPERATURE", "0.0")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["temperature"] == (0.0,)
+
+
+def test_temperature_env_invalid_falls_back_to_ladder(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_TEMPERATURE", "not-a-number")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["temperature"] == (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 
 
 def test_language_env_override_pins_english(monkeypatch):

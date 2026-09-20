@@ -1237,10 +1237,22 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     code-switched audio whose labels keep English in Latin (see
     ``scripts/finetune_whisper_ne_en.py``).
 
+    Nepali accuracy is tuned by Whisper's own temperature-fallback ladder
+    (``temperature=[0.0, 0.2, … 1.0]``): a greedy 0.0 pass is kept when it looks
+    healthy, but when a window collapses into a repetition loop or low-confidence
+    output — the dominant Nepali failure mode of a forced ``ne`` decode — the
+    decoder retries that window at a higher temperature instead of emitting the
+    garbage. The retry is gated by faster-whisper's quality checks
+    (``compression_ratio_threshold=2.4``, ``log_prob_threshold=-1.0``,
+    ``no_speech_threshold=0.6``); pinning a single ``0.0`` disabled all of them.
+    Output stays deterministic for clean audio (0.0 is tried first and kept).
+
     Overrides via env: ``OMNIVOICE_CS_LANGUAGE`` (default ``ne``, set ``en`` to
     pin English), ``OMNIVOICE_CS_BEAM_SIZE`` (default ``5``),
     ``OMNIVOICE_CS_ASR_MODEL`` (default the inherited faster-whisper large-v3),
-    ``OMNIVOICE_CS_PROMPT`` (the mixed-script priming text; set empty to disable).
+    ``OMNIVOICE_CS_PROMPT`` (the mixed-script priming text; set empty to disable),
+    ``OMNIVOICE_CS_TEMPERATURE`` (a single float to force greedy-only decoding, or
+    a comma list to customise the fallback ladder; default is the standard ladder).
     """
 
     id = "whisper-ne-en"
@@ -1252,6 +1264,11 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     #: so Whisper keeps embedded English in Latin instead of transliterating it.
     _DEFAULT_PROMPT = "मैले office को email मा reply गरें। Client सँग meeting भयो।"
 
+    #: OpenAI/faster-whisper's standard temperature-fallback ladder. 0.0 is tried
+    #: first (deterministic); higher rungs only fire when a window fails the
+    #: compression-ratio / log-prob quality gates below.
+    _DEFAULT_TEMPERATURE = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
     def __init__(self):
         super().__init__()
         # Pinned to Nepali (the notebook forces "ne"); overridable for a
@@ -1262,16 +1279,30 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             self._beam_size = int(os.environ.get("OMNIVOICE_CS_BEAM_SIZE", "5"))
         except (TypeError, ValueError):
             self._beam_size = 5
+        self._temperature = self._parse_temperature(os.environ.get("OMNIVOICE_CS_TEMPERATURE"))
         # Mixed-script prompt keeps English in Latin (env can override or, when
         # set to an empty string, disable priming entirely).
         prompt = os.environ.get("OMNIVOICE_CS_PROMPT")
         self._initial_prompt = (self._DEFAULT_PROMPT if prompt is None else prompt).strip() or None
 
+    @classmethod
+    def _parse_temperature(cls, raw):
+        """The fallback ladder by default; a single float (greedy-only) or a
+        comma-separated ladder when ``OMNIVOICE_CS_TEMPERATURE`` is set. Any
+        malformed value falls back to the default ladder."""
+        if not raw:
+            return cls._DEFAULT_TEMPERATURE
+        try:
+            vals = tuple(float(v) for v in raw.split(",") if v.strip())
+        except ValueError:
+            return cls._DEFAULT_TEMPERATURE
+        return vals or cls._DEFAULT_TEMPERATURE
+
     def transcribe(self, audio_path: str, *, word_timestamps: bool = True) -> dict:
         self._ensure_model()
         logger.info(
-            "code-switch transcribing %s as %s (beam=%d, word_timestamps=%s)",
-            audio_path, self._language, self._beam_size, word_timestamps,
+            "code-switch transcribing %s as %s (beam=%d, temp=%s, word_timestamps=%s)",
+            audio_path, self._language, self._beam_size, self._temperature, word_timestamps,
         )
         # faster-whisper decodes the file itself via PyAV (no ffmpeg CLI needed).
         segments_iter, info = self._model.transcribe(
@@ -1280,7 +1311,13 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             task="transcribe",           # never translate
             beam_size=self._beam_size,
             best_of=self._beam_size,
-            temperature=0.0,             # deterministic decoding
+            # Temperature-fallback ladder (0.0 first → deterministic for clean
+            # audio); higher rungs recover Nepali windows that fail the quality
+            # gates below instead of emitting a repetition loop / low-conf garbage.
+            temperature=self._temperature,
+            compression_ratio_threshold=2.4,  # retry if output looks repetitive
+            log_prob_threshold=-1.0,          # retry if avg token logprob too low
+            no_speech_threshold=0.6,          # treat as silence above this
             vad_filter=True,             # built-in Silero VAD — drop non-speech
             vad_parameters=dict(min_silence_duration_ms=500),
             condition_on_previous_text=False,
