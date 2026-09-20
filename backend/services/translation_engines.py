@@ -57,6 +57,8 @@ REGISTRY: dict[str, dict] = {
         "probe_module": "deep_translator",
         "category": "online",
         "needs_key": False,
+        # A core dependency: TRANSLATE_PROVIDER defaults to "google".
+        "builtin": True,
         "notes": "Free web endpoint via deep_translator. Rate-limited by Google; no API key required.",
     },
     "deepl": {
@@ -66,6 +68,8 @@ REGISTRY: dict[str, dict] = {
         "probe_module": "deep_translator",
         "category": "online",
         "needs_key": True,
+        # Ships with deep-translator (a core dependency); only the key is user-supplied.
+        "builtin": True,
         "notes": "High-quality EU MT. Free tier: 500K chars/month. Set DEEPL_API_KEY.",
     },
     "microsoft": {
@@ -75,6 +79,8 @@ REGISTRY: dict[str, dict] = {
         "probe_module": "deep_translator",
         "category": "online",
         "needs_key": True,
+        # Ships with deep-translator (a core dependency); only the key is user-supplied.
+        "builtin": True,
         "notes": "Azure Cognitive Services. Free tier: 2M chars/month. Set MICROSOFT_API_KEY.",
     },
     "mymemory": {
@@ -84,6 +90,8 @@ REGISTRY: dict[str, dict] = {
         "probe_module": "deep_translator",
         "category": "online",
         "needs_key": False,
+        # Ships with deep-translator (a core dependency).
+        "builtin": True,
         "notes": "Crowdsourced MT. Free, 5K chars/day anonymous; more with an email param.",
     },
     "openai": {

@@ -117,6 +117,13 @@ dependencies = [
     # Offline translation — listed as builtin in the engine registry so the
     # "Argos (Local, Fast)" option in the Dub tab works out-of-the-box.
     "argostranslate>=1.9.0",
+    # Google/DeepL/Microsoft/MyMemory translation. Not optional in practice:
+    # TRANSLATE_PROVIDER defaults to "google" (api/routers/dub_translate.py),
+    # so without this every Dub translation on a fresh install failed with a
+    # bare ImportError — the router imports fine at startup and only breaks
+    # per-request, which made it look like a backend outage rather than a
+    # missing package.
+    "deep-translator>=1.11",
     # Phase 1 AUTH-02: Fernet symmetric encryption + scrypt KDF for the
     # at-rest HF token in the SQLite settings store. Pulled in directly so
     # we don't depend on a transitive arrival via pyannote/huggingface_hub

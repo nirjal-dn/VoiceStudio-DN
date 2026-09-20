@@ -50,11 +50,45 @@ def test_a_package_the_app_depends_on_is_never_uninstalled(monkeypatch):
 
 
 def test_a_package_other_engines_share_is_never_uninstalled(monkeypatch):
+    """Two engines, one package, neither declared by the app -> 409.
+
+    Uses synthetic entries rather than the real google/deepl pair: since
+    ``deep-translator`` became a declared dependency (it backs the default
+    TRANSLATE_PROVIDER, and shipping a default that needs a pip step was the
+    #2019-class bug all over again), those four engines are caught earlier by
+    the stronger app-dependency guard below. The sharing rule still needs its
+    own coverage, so this exercises it where it is the only thing standing in
+    the way.
+    """
+    _, te = _router()
+    for eid, name in (("x-a", "Engine A"), ("x-b", "Engine B")):
+        monkeypatch.setitem(
+            te.REGISTRY, eid,
+            {"id": eid, "display_name": name, "pip_package": "shared-mt"},
+        )
+    with pytest.raises(HTTPException) as err:
+        _uninstall(monkeypatch, "x-a")
+    assert err.value.status_code == 409
+    assert "Engine B" in err.value.detail
+
+
+def test_a_deep_translator_engine_is_refused_as_an_app_dependency(monkeypatch):
+    """The four deep_translator engines are builtin AND app-declared.
+
+    Both guards should refuse them; the route's ``builtin`` check runs first,
+    so that is what the caller sees. ``uninstall_blocker`` is asserted
+    separately because it is deliberately independent of the flag (a promise
+    someone has to remember to make) and must refuse on its own.
+    """
+    _, te = _router()
     with pytest.raises(HTTPException) as err:
         _uninstall(monkeypatch, "google")
-    assert err.value.status_code == 409
-    for name in ("DeepL", "Microsoft", "MyMemory"):
-        assert name in err.value.detail
+    assert err.value.status_code == 400
+    assert "built-in" in err.value.detail
+
+    status, detail = te.uninstall_blocker("google")
+    assert status == 400
+    assert "VoiceStudio itself" in detail
 
 
 def test_names_compare_in_normalized_form():
