@@ -49,6 +49,7 @@ import re
 import struct
 import sys
 import threading
+import time as _time
 import traceback
 import unicodedata
 from collections import OrderedDict
@@ -76,6 +77,12 @@ _TEMPERATURE = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TEMPERATURE", "0.7"))
 _REPETITION_PENALTY = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_REPETITION_PENALTY", "10.0"))
 _TOP_K = int(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_K", "50"))
 _TOP_P = float(os.environ.get("OMNIVOICE_XTTS_NEPALI_TOP_P", "0.85"))
+
+#: Per-chunk synthesis timing to stderr (the parent mirrors it into
+#: omnivoice.log). Off by default; on a CPU host it is the difference between
+#: "it timed out" and "it runs at 3.7x realtime and the load costs 40s".
+_TIMING = os.environ.get("OMNIVOICE_XTTS_NEPALI_TIMING", "0").strip().lower() \
+    not in ("0", "false", "no", "off")
 
 #: Silence between split pieces, in seconds.
 _GAP_S = 0.2
@@ -141,10 +148,31 @@ _nepali = _load_nepali_text()
 _ne_number = _nepali.number_words
 
 
+#: Rewrite Latin words as Devanagari before synthesis. On by default: this
+#: checkpoint reads Devanagari, and while the Hindi route's tokenizer does not
+#: REJECT Latin, the tokens it produces carry Devanagari phonetics that the
+#: Nepali fine-tune barely saw — so English came out as the model's guess.
+#: Set OMNIVOICE_XTTS_NEPALI_TRANSLITERATE=0 for the old pass-through.
+_TRANSLITERATE = os.environ.get(
+    "OMNIVOICE_XTTS_NEPALI_TRANSLITERATE", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+
+
 def _normalize_nepali_text(text: str) -> str:
-    """Numbers/dates/times as Nepali words, then Latin acronyms spelled out:
-    the Hindi route's tokenizer can read neither digits nor Latin capitals."""
-    return _nepali.spell_acronyms(_nepali.normalize_numbers(text))
+    """Numbers/dates/times as Nepali words, then every Latin word rewritten as
+    Devanagari: the Hindi route's tokenizer can read neither digits nor Latin
+    script well.
+
+    ``transliterate_latin`` subsumes ``spell_acronyms`` — it spells an all-caps
+    run the same way, but also handles acronyms said as words ("OK" → ओके, not
+    ओ के) and lowercase words, which spell_acronyms never touched. With
+    transliteration off, the acronym-only pass still runs, so that path is
+    byte-identical to before.
+    """
+    text = _nepali.normalize_numbers(text)
+    if _TRANSLITERATE:
+        return _nepali.transliterate_latin(text)
+    return _nepali.spell_acronyms(text)
 
 
 _MODEL = None
@@ -427,32 +455,45 @@ def _handle_synthesize(msg: dict, stdout) -> None:
     import numpy as np  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
-    language = _xtts_language(msg.get("language"), model.config.languages)
-    route = "hi" if language == "ne" and _NE_ROUTE == "hi" else language
-    if language == "ne" and route == "hi":
-        text = _normalize_nepali_text(text)
-    # XTTS asserts text_tokens.shape[-1] < gpt_max_text_tokens. Leave one
-    # token of headroom because the tokenizer adds language/special tokens.
-    max_tokens = int(getattr(model.args, "gpt_max_text_tokens", 400))
-    token_limit = max(2, max_tokens - 1)
-    chunks = _chunks(text, model.tokenizer, route, token_limit)
-    if not chunks:
-        raise ValueError("synthesize: text has nothing speakable")
+    # The load's heartbeat has exited and the synthesis one has not started
+    # yet, so everything in between used to run with the pipe silent — and it
+    # is not cheap work: _chunks() runs the tokenizer over the whole text word
+    # by word, and _voice_latents() encodes the reference clip. On a CPU host
+    # that gap can outlast the parent's recv watchdog
+    # (OMNIVOICE_XTTS_NEPALI_RECV_TIMEOUT_S, 600s), which then kills a
+    # perfectly healthy sidecar as a "silent wedge". Keep it fed so only real
+    # silence is ever punished.
+    with _Heartbeat(stdout, "preparing"):
+        language = _xtts_language(msg.get("language"), model.config.languages)
+        route = "hi" if language == "ne" and _NE_ROUTE == "hi" else language
+        if language == "ne" and route == "hi":
+            text = _normalize_nepali_text(text)
+        # XTTS asserts text_tokens.shape[-1] < gpt_max_text_tokens. Leave one
+        # token of headroom because the tokenizer adds language/special tokens.
+        max_tokens = int(getattr(model.args, "gpt_max_text_tokens", 400))
+        token_limit = max(2, max_tokens - 1)
+        chunks = _chunks(text, model.tokenizer, route, token_limit)
+        if not chunks:
+            raise ValueError("synthesize: text has nothing speakable")
 
-    seed = msg.get("seed")
-    if isinstance(seed, int) and not isinstance(seed, bool):
-        torch.manual_seed(seed)
-    try:
-        speed = min(2.0, max(0.5, float(msg.get("speed") or 1.0)))
-    except (TypeError, ValueError):
-        speed = 1.0
+        seed = msg.get("seed")
+        if isinstance(seed, int) and not isinstance(seed, bool):
+            torch.manual_seed(seed)
+        try:
+            speed = min(2.0, max(0.5, float(msg.get("speed") or 1.0)))
+        except (TypeError, ValueError):
+            speed = 1.0
 
-    gpt_cond_latent, speaker_embedding = _voice_latents(model, msg.get("ref_audio") or None)
+        gpt_cond_latent, speaker_embedding = _voice_latents(
+            model, msg.get("ref_audio") or None)
+
     gap = np.zeros(int(_GAP_S * XTTS_SAMPLE_RATE), dtype=np.float32)
     pieces = []
+    _t_all = _time.time()
     with _Heartbeat(stdout, "synthesizing") as hb, torch.inference_mode():
         for i, chunk in enumerate(chunks):
             hb.percent = int(100 * i / len(chunks))
+            _t_chunk = _time.time()
             out = model.inference(
                 chunk,
                 route,
@@ -466,9 +507,20 @@ def _handle_synthesize(msg: dict, stdout) -> None:
                 speed=speed,
                 enable_text_splitting=False,
             )
+            if _TIMING:
+                _w = np.asarray(out["wav"], dtype=np.float32).reshape(-1)
+                _d = len(_w) / XTTS_SAMPLE_RATE
+                _e = _time.time() - _t_chunk
+                print(f"[timing] chunk{i} chars={len(chunk)} audio_s={_d:.2f} "
+                      f"wall_s={_e:.1f} rtf={_e / max(_d, 0.01):.1f}x",
+                      file=sys.stderr, flush=True)
             if pieces:
                 pieces.append(gap)
             pieces.append(np.asarray(out["wav"], dtype=np.float32).reshape(-1))
+
+    if _TIMING:
+        print(f"[timing] synthesis_total_s={_time.time() - _t_all:.1f} "
+              f"chunks={len(chunks)}", file=sys.stderr, flush=True)
 
     pcm_b64, n_samples = _pcm_b64(np.concatenate(pieces))
     _send(stdout, {

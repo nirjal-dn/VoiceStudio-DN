@@ -87,10 +87,21 @@ def test_realistic_numbers_dates_and_phones(xtts, raw, spoken):
     "राम बहादुर थापा र सीता श्रेष्ठ काठमाडौंमा बस्छन्।",  # proper nouns
     "क्षत्रिय ज्ञान श्रीमान् द्वारा संस्कृत स्वास्थ्य",  # conjuncts
     "के तपाईं भोलि आउनुहुन्छ? हजुर, आउँछु।",  # punctuation
-    "Kathmandu University मा admission खुल्यो।",  # mixed, lowercase English
 ])
 def test_text_without_numbers_or_acronyms_is_unchanged(xtts, text):
     assert xtts._normalize_nepali_text(text) == text
+
+
+def test_mixed_latin_is_now_transliterated_not_passed_through(xtts):
+    """Was asserted unchanged while Latin reached the engine verbatim. It no
+    longer does: this checkpoint reads Devanagari, and the Latin tokens the
+    Hindi cleaner produced carried phonetics the Nepali fine-tune barely saw,
+    so English was spoken as the model's guess. The case is kept — with its
+    new expectation — because "what happens to mixed text" is the behaviour
+    that changed."""
+    out = xtts._normalize_nepali_text("Kathmandu University मा admission खुल्यो।")
+    assert not any("a" <= c.lower() <= "z" for c in out)
+    assert out.startswith("काठमाडौं युनिभर्सिटी")
 
 
 def test_mixed_text_spells_acronyms_and_reads_numbers(xtts):
@@ -108,3 +119,19 @@ def test_nepali_number_words_cover_every_value_below_a_hundred(xtts):
     words = [xtts._ne_number(n) for n in range(100)]
     assert len(set(words)) == 100  # a distinct Nepali word for each
     assert all(w and not any(ch.isdigit() for ch in w) for w in words)
+
+
+def test_the_sidecar_leaves_no_latin_in_a_mixed_sentence(xtts):
+    """End-to-end through the sidecar's own hook, not the helper directly: an
+    assertion on the helper passes even if the wiring never calls it."""
+    out = xtts._normalize_nepali_text("म आज office मा 5 वटा meeting गरेँ")
+    assert not any("a" <= c.lower() <= "z" for c in out)
+    assert "अफिस" in out and "मिटिङ" in out
+    assert "पाँच" in out, "numbers must still be normalized first"
+
+
+def test_the_sidecar_can_be_put_back_to_the_old_behaviour(xtts, monkeypatch):
+    """OMNIVOICE_XTTS_NEPALI_TRANSLITERATE=0 restores the acronyms-only pass,
+    so a user who preferred the old output is not stranded."""
+    monkeypatch.setattr(xtts, "_TRANSLITERATE", False)
+    assert "office" in xtts._normalize_nepali_text("म office गएँ")
