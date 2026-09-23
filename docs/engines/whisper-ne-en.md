@@ -21,6 +21,21 @@ Enable it in **Model Catalogue → transcription**, or pin it:
 export OMNIVOICE_ASR_BACKEND=whisper-ne-en
 ```
 
+### Turbo variant (`whisper-ne-en-turbo`)
+
+`whisper-ne-en-turbo` runs the **exact same recipe** on the Whisper large-v3
+**Turbo** weights (`deepdml/faster-whisper-large-v3-turbo-ct2`, ~1.6 GB, 0.8B
+params) — ~5× faster for quicker dictation at a small accuracy cost. Same forced-
+`ne` decode, mixed-script priming, Devanagari-digit mapping, punctuation, and
+English/Nepali separation; only the model differs. Pin it the same way:
+
+```bash
+export OMNIVOICE_ASR_BACKEND=whisper-ne-en-turbo
+```
+
+Every `OMNIVOICE_CS_*` variable below applies to both engines
+(`OMNIVOICE_CS_ASR_MODEL` overrides the pinned model on either).
+
 ## How it decodes (the forced-Nepali recipe)
 
 Whisper saw far more Hindi than Nepali, and the two share Devanagari and much
@@ -56,6 +71,17 @@ recording. This is the recipe validated in the reference notebook
    segment spanning start→stop**, not a timestamped list of utterances.
    Consumers that need per-utterance timings (e.g. dubbing lip-sync) use the
    plain [Faster-Whisper](faster-whisper.md) engine instead.
+6. **Spoken number _words_ become digits, in the spoken language's script.**
+   Whisper writes numbers as *words* as often as digits, in whichever language
+   was spoken — and that language is known from the word itself, so the script
+   is decided there, never guessed from the surrounding sentence: English number
+   words → Western digits (`nine thousand eight hundred forty-five` → `9845`),
+   Nepali number words → Devanagari numerals (`सन्तानब्बे, एकचालिस` → `९७, ४१`).
+   A number Whisper already wrote as **bare digits** is left untouched — its
+   spoken language is no longer recoverable, so an English amount inside a Nepali
+   sentence stays `9845`, never `९८४५`. The `छ` homograph ("six" / the copula
+   "is") is only read as `6` right before a scale word (`छ सय` → `600`), so
+   ordinary Nepali is left intact. Toggle with `OMNIVOICE_CS_SPOKEN_NUMBERS`.
 
 ## Configuration
 
@@ -64,6 +90,10 @@ recording. This is the recipe validated in the reference notebook
 | `OMNIVOICE_CS_LANGUAGE` | `ne` | Whisper decode language. Set `en` to pin English, or any Whisper language code. |
 | `OMNIVOICE_CS_BEAM_SIZE` | `5` | Beam size / `best_of`. Lower (e.g. `1`) is faster on CPU at some accuracy cost. |
 | `OMNIVOICE_CS_TEMPERATURE` | ladder `0.0,0.2,…,1.0` | Decode temperature. A single float (e.g. `0.0`) forces greedy-only; a comma list customises the fallback ladder. |
+| `OMNIVOICE_CS_REPETITION_PENALTY` | `1.1` | Soft penalty (>1.0) against the decode repetition loop that both duplicates the tail (“the last few words repeat”) and, via its overshooting timestamp, truncates long files. Lower to `1.0` to disable; raise (e.g. `1.3`) for stubborn loops. |
+| `OMNIVOICE_CS_NO_REPEAT_NGRAM` | `0` (off) | Hard block: forbid any repeated N-token run. Off by default because it can clip genuine Nepali reduplication (`बिस्तारै बिस्तारै`); set `3` only if the soft penalty above leaves loops. |
+| `OMNIVOICE_CS_HALLUCINATION_SILENCE_S` | `2.0` | Skip silent gaps longer than this (seconds), where Whisper tends to hallucinate/loop. Applied only on the word-timestamped paths (dub / file), the only place faster-whisper can locate gaps; `0` disables. |
+| `OMNIVOICE_CS_SPOKEN_NUMBERS` | `1` (on) | Convert spoken number *words* to digits, each in the script of the language it was spoken in: English words → Western digits (`nine thousand eight hundred forty-five` → `9845`), Nepali words → Devanagari numerals (`सन्तानब्बे` → `९७`). Cardinals only, decided from the number word itself — bare digits Whisper already emitted are preserved, never guessed from surrounding script. A lone/trailing `छ` (also the copula "is") stays a word — it counts as `6` only right before a scale (`छ सय` → `600`). Set `0` to keep Whisper's number words verbatim. |
 | `OMNIVOICE_CS_ASR_MODEL` | `Systran/faster-whisper-large-v3` | The CTranslate2 large-v3 repo to load. |
 
 ## Limits
@@ -74,3 +104,13 @@ production-grade intra-word switching, fine-tune large-v3 on a Nepali–English
 code-switched corpus and point `OMNIVOICE_CS_ASR_MODEL` at the converted result
 — no code change needed. Pure-Nepali audio where you do **not** need English is
 still best served by [IndicConformer](indic-conformer.md).
+
+On a **long file**, if the transcript stops early or the last few words repeat,
+that is Whisper's decode repetition loop (a looped segment's overshooting
+timestamp makes the decoder seek past the rest of the audio). The default
+`OMNIVOICE_CS_REPETITION_PENALTY=1.1` suppresses it; raise it, or enable
+`OMNIVOICE_CS_NO_REPEAT_NGRAM=3`, if a specific clip still loops. Note this is a
+*decoding* fix, not a speed one: large-v3 on CPU is slow, and a genuinely long
+file can exceed the whole-file transcribe guard (`OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S`,
+default 300 s) — raise that for very long single files, or pick a smaller/Turbo
+model.

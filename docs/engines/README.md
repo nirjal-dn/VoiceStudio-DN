@@ -54,6 +54,7 @@ approval), [Windows](../install/windows.md), [Linux](../install/linux.md),
 | WhisperX | [whisperx](whisperx.md) | CUDA · CPU | dubbing (word timestamps + diarization) | installed by default |
 | Faster-Whisper | [faster-whisper](faster-whisper.md) | CUDA · CPU | general transcription | installed by default |
 | Whisper Nepali+English code-switch | [whisper-ne-en](whisper-ne-en.md) | CUDA · CPU | mixed Nepali/English in one sentence (single-pass) | installed by default (reuses faster-whisper) |
+| Whisper Nepali+English code-switch (Turbo) | [whisper-ne-en-turbo](whisper-ne-en.md#turbo-variant-whisper-ne-en-turbo) | CUDA · CPU | same, ~5× faster (large-v3 Turbo) | installed by default (reuses faster-whisper) |
 | Faster-Whisper (isolated) | [faster-whisper-isolated](faster-whisper-isolated.md) | CUDA · CPU | unattended batches | opt-in pick |
 | MLX Whisper | [mlx-whisper](mlx-whisper.md) | Apple Silicon | Mac default | `pip install mlx-whisper` |
 | PyTorch Whisper | [pytorch-whisper](pytorch-whisper.md) | CUDA · MPS · CPU | ROCm hosts | installed by default |
@@ -67,3 +68,9 @@ approval), [Windows](../install/windows.md), [Linux](../install/linux.md),
 Speaker diarization is not an engine registry of its own — the dub pipeline
 uses pyannote (HF-gated; see [diarization](../features/diarization.md)) and
 FunASR can diarize inline with its `cam++` speaker model.
+
+**Code-switch restoration** is a post-processing layer, not an engine: an
+opt-in local LLM rewrites phonetic-English words in a Devanagari transcript
+(IndicConformer) back to Latin script and adds punctuation
+(`नमस्ते, मेरो account को balance कति छ?`). See
+[codeswitch-restore](codeswitch-restore.md).

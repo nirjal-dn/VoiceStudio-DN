@@ -247,6 +247,15 @@ pockettts = [
     # with an explicit engine availability reason on Intel Macs.
     "pocket-tts==2.1.0 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
+# Code-switch restoration opt-in (services/codeswitch_restore.py). CPU-only
+# GGUF inference via llama.cpp for rewriting phonetic-English Devanagari words
+# back to Latin + punctuation on IndicConformer transcripts. Default install
+# does NOT pull this; users opt in with `uv sync --extra codeswitch` and enable
+# it with OMNIVOICE_CODESWITCH_RESTORE=1. The model (~1 GB) downloads on first
+# use. See docs/engines/codeswitch-restore.md.
+codeswitch = [
+    "llama-cpp-python>=0.3.0",
+]
 
 [project.scripts]
 omnivoice-infer = "omnivoice.cli.infer:main"

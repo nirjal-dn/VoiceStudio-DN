@@ -512,6 +512,17 @@ async def ws_transcribe(websocket: WebSocket):
                         result["refined_text"] = refined
                 except Exception as e:  # noqa: BLE001
                     logger.debug("Dictation refinement skipped: %s", e)
+                # Code-switch restoration (opt-in): Latinize phonetic-English
+                # words in a Devanagari final + add punctuation. Off by default,
+                # hard-time-bounded, best-effort. Surfaced as refined_text.
+                try:
+                    from services.codeswitch_restore import maybe_restore_codeswitch_async
+                    base = result.get("refined_text") or result["text"]
+                    restored = await maybe_restore_codeswitch_async(base)
+                    if restored and restored != result["text"]:
+                        result["refined_text"] = restored
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("Code-switch restoration skipped: %s", e)
             if whole_recording:
                 result["final_kind"] = "summary"  # sherpa-mode clients finalize on it
             if not await _safe_send({"type": "final", **result}):
@@ -932,6 +943,18 @@ async def _run_sherpa_streaming(websocket: WebSocket, spec):
                 refined = None
             if refined and refined != full:
                 payload["refined_text"] = refined
+            # Code-switch restoration (opt-in): Latinize phonetic-English words
+            # in a Devanagari final + add punctuation. Off by default, bounded,
+            # best-effort. Chains on any refinement above.
+            try:
+                from services.codeswitch_restore import maybe_restore_codeswitch_async
+                restored = await maybe_restore_codeswitch_async(
+                    payload.get("refined_text") or full
+                )
+            except Exception:
+                restored = None
+            if restored and restored != full:
+                payload["refined_text"] = restored
         await _send(payload)
         try:
             await websocket.close()
@@ -1121,6 +1144,16 @@ async def _run_sherpa_offline(websocket: WebSocket, spec):
                 refined = await maybe_refine_async(full)
                 if refined and refined != full:
                     payload["refined_text"] = refined
+            except Exception:
+                pass
+            # Code-switch restoration (opt-in) — chains on any refinement above.
+            try:
+                from services.codeswitch_restore import maybe_restore_codeswitch_async
+                restored = await maybe_restore_codeswitch_async(
+                    payload.get("refined_text") or full
+                )
+                if restored and restored != full:
+                    payload["refined_text"] = restored
             except Exception:
                 pass
         await _send(payload)

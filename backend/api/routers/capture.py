@@ -204,6 +204,21 @@ async def transcribe_audio(
                 if refined != full_text:
                     refined_text = refined
 
+        # Code-switch restoration (opt-in, OMNIVOICE_CODESWITCH_RESTORE): a
+        # Devanagari transcript (IndicConformer) has English words spelled
+        # phonetically in Devanagari — a small local LLM rewrites those back to
+        # Latin script and adds punctuation. Off by default (identical
+        # pass-through on every OS); best-effort — never raises, and a rewrite
+        # that fails the Devanagari-preservation guard is dropped. Surfaced as
+        # refined_text (chaining on any refinement above) so the raw transcript
+        # and segments stay intact and clients keep `refined_text ?? text`.
+        if full_text:
+            from services.codeswitch_restore import maybe_restore_codeswitch
+            base = refined_text or full_text
+            restored = await asyncio.to_thread(maybe_restore_codeswitch, base)
+            if restored and restored != full_text:
+                refined_text = restored
+
         logger.info(
             "Capture transcription done: engine=%s, elapsed=%.2fs, duration=%.1fs, mode=%s, refined=%s",
             engine_id, elapsed, duration, "accurate" if use_accurate else "fast",

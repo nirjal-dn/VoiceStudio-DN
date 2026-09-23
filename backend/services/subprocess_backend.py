@@ -42,6 +42,7 @@ import atexit
 import base64
 import contextlib
 import collections
+import functools
 import json
 import logging
 import os
@@ -123,6 +124,45 @@ def recv_timeout_from_env(name: str, default: float) -> float:
     if not math.isfinite(value):
         return float(default)
     return max(30.0, value)
+
+
+@functools.lru_cache(maxsize=1)
+def _host_has_accelerator() -> bool:
+    """True when a GPU this build can synth on (CUDA or MPS) is present.
+
+    The generate recv watchdog exists to hard-kill a wedged sidecar and reclaim
+    its *accelerator device*. A CPU-only host has no device to reclaim, so that
+    aggressive deadline buys nothing there — and it actively harms: a heavy TTS
+    forward pass runs for minutes on CPU and emits no heartbeat *during
+    synthesis* (unlike model load, which does #1367), so the tight deadline
+    hard-kills a slow-but-healthy synth mid-forward-pass. Cached — the host's
+    accelerators don't appear mid-run."""
+    try:
+        if torch.cuda.is_available():
+            return True
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return True
+    except Exception:  # noqa: BLE001 — a probe must never crash generate
+        pass
+    return False
+
+
+def _effective_generate_recv_timeout(base: float) -> float:
+    """The recv deadline to use for a *generate* (not health-check/spawn).
+
+    On an accelerator host, the engine's own ``recv_timeout_s`` — a device is at
+    stake, so a wedge must be reclaimed promptly. On a CPU-only host, floor it at
+    the CPU generate budget (``OMNIVOICE_CPU_GENERATE_TIMEOUT_S``, default 600s)
+    so a legitimately-slow CPU synth gets the same ceiling as the in-process
+    path instead of being killed at the tighter accelerator deadline."""
+    if _host_has_accelerator():
+        return base
+    try:
+        from services.model_manager import CPU_JOB_TIMEOUT_S
+    except Exception:  # noqa: BLE001 — fall back to the base if MM isn't importable
+        return base
+    return max(base, CPU_JOB_TIMEOUT_S)
 
 
 # ── Idle sidecar reaping (parity Action 13) ─────────────────────────────────
@@ -768,7 +808,12 @@ class SubprocessBackend(TTSBackend):
                     if _is_jsonable(v):
                         msg[k] = v
                 self._send(msg)
-                reply = self._recv_with_timeout(self.recv_timeout_s)
+                # On a CPU-only host, floor the recv deadline at the CPU generate
+                # budget: synthesis emits no heartbeat and runs for minutes on
+                # CPU, and there's no device to reclaim, so the tight accelerator
+                # deadline would kill a healthy synth mid-forward-pass.
+                recv_timeout = _effective_generate_recv_timeout(self.recv_timeout_s)
+                reply = self._recv_with_timeout(recv_timeout)
                 # A cold sidecar may emit non-terminal {"op": "progress"} frames
                 # (during a model load, etc.) before the terminal audio frame.
                 # Each recv re-arms the watchdog, so a long-but-active load
@@ -792,7 +837,7 @@ class SubprocessBackend(TTSBackend):
                             report_model_load_activity()
                     except Exception:
                         pass  # the heartbeat is best-effort; never fail a synth over it
-                    reply = self._recv_with_timeout(self.recv_timeout_s)
+                    reply = self._recv_with_timeout(recv_timeout)
             if not reply:
                 raise RuntimeError(f"{self.id} sidecar closed pipe mid-generate")
             if reply.get("op") == "error":

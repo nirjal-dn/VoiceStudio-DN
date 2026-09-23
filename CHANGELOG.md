@@ -21,9 +21,11 @@ the frozen-backend fallback mirror it for their toolchains.
 - `auto-lang` ASR: Whisper transcribes and detects the language; Nepali re-routes to IndicConformer (Devanagari-native), everything else stays single-pass Whisper
 - `auto-lang` TTS: Devanagari text routes to the Nepali engine (Oshara/XTTS), everything else to VoiceStudio/OmniVoice — per line, so mixed batches route each line
 - `whisper-ne-en` ASR: Whisper large-v3 tuned for Nepali↔English code-switched speech — transcribes a mixed sentence (`नमस्ते, मेरो account को balance कति छ?`) as one complete transcript in a single pass, Nepali in Devanagari and English in Latin. Detection is Nepali-biased (Hindi/Sanskrit scores count as evidence *for* Nepali, never decoded as Hindi), so Nepali survives even when English dominates the audio; only genuinely English-only clips decode as English (no extra install; reuses faster-whisper)
+- `whisper-ne-en-turbo` ASR: same Nepali↔English code-switch recipe on the Whisper large-v3 Turbo model — ~5× faster for quicker dictation at a small accuracy cost; `OMNIVOICE_CS_ASR_MODEL` overrides the pinned Turbo weights (no extra install; reuses faster-whisper)
 
 ### Added
 
+- Code-switch restoration: an opt-in local LLM rewrites phonetic-English words in a Devanagari (IndicConformer) transcript back to Latin script and adds punctuation (`मेरो अकाउन्टको ब्यालेन्स चेक गरिदिनुहोस्` → `मेरो account को balance check गरिदिनुहोस्।`) — CPU-only GGUF (Qwen2.5-1.5B) via llama.cpp, off by default, enable with `uv sync --extra codeswitch` + `OMNIVOICE_CODESWITCH_RESTORE=1` (see docs/engines/codeswitch-restore.md)
 - XTTS v2 Nepali engine (Oshara fine-tune) for Nepali speech and voice cloning, in its own environment; weights are non-commercial — thanks @nirjal-dn!
 - IndicConformer speech recognition for Nepali and 21 other Indian languages, including whole-recording dictation — thanks @nirjal-dn!
 - Indic Parler-TTS engine: Nepali and 20 other Indian languages, with the voice chosen by a text description — thanks @nirjal-dn!
@@ -31,6 +33,10 @@ the frozen-backend fallback mirror it for their toolchains.
 ### Changed
 
 - `whisper-ne-en` ASR now decodes with Whisper's temperature-fallback ladder (`0.0` first, then `0.2…1.0`) gated by compression-ratio/log-prob checks, so a Nepali window that would collapse into a repetition loop or low-confidence output is retried instead of emitted — improving Nepali accuracy; force greedy-only with `OMNIVOICE_CS_TEMPERATURE=0.0`
+- `whisper-ne-en` ASR no longer repeats the last few words or cuts a long recording short — Whisper's greedy decode could fall into a repetition loop whose overshooting timestamp made faster-whisper seek past the rest of the audio; a soft repetition penalty (`OMNIVOICE_CS_REPETITION_PENALTY`, default `1.1`) now suppresses the loop, with an opt-in hard n-gram block (`OMNIVOICE_CS_NO_REPEAT_NGRAM`) and silent-gap hallucination skip (`OMNIVOICE_CS_HALLUCINATION_SILENCE_S`, word-timestamped paths) for stubborn cases
+- `whisper-ne-en` ASR now converts spoken number *words* to digits in the spoken language's script — English words → Western digits (`nine thousand eight hundred forty-five` → `9845`), Nepali words → Devanagari numerals (`सन्तानब्बे, एकचालिस` → `९७, ४१`); the `छ` homograph ("six" / the copula "is") counts as `6` only right before a scale word (`छ सय` → `600`), so ordinary Nepali is untouched; `OMNIVOICE_CS_SPOKEN_NUMBERS=0` keeps Whisper's number words verbatim
+- `whisper-ne-en` ASR no longer guesses a number's script from the surrounding sentence — the script is fixed by the spoken language of the number *word* itself (Nepali word → Devanagari, English word → Western). Bare digits Whisper already emitted are preserved as-is, so an English amount inside a Nepali sentence stays `9845` and is never flipped to `९८४५` (removes the old neighbouring-word heuristic and its `OMNIVOICE_CS_DEVANAGARI_DIGITS` toggle)
+- `whisper-ne-en` ASR primes decoding with a richer mixed-script prompt (more common tech/work/money/everyday English words in Latin), so fewer embedded English words get transliterated into Devanagari; override with `OMNIVOICE_CS_PROMPT`
 - Nepali numbers, Bikram Sambat and Gregorian dates, times, percentages and phone numbers are spoken as Nepali words by every TTS engine; see docs/nepali.md
 - Long Nepali text is split at the danda, and a forced cut never separates a vowel sign or conjunct from its consonant
 - IndicConformer transcribes in the request's language (Dubbing source, `/transcribe`, voice language) and handles recordings of any length in passes of at most 90 s
@@ -50,6 +56,7 @@ the frozen-backend fallback mirror it for their toolchains.
 - Transcribing an M4A file with PyTorch Whisper works, instead of failing with "Format not recognised" (#2042, #2039)
 - PyTorch Whisper runs on 6 GB NVIDIA cards instead of falling back to CPU, because its memory check now fits the model it loads (#2044, #2041)
 - MCP tools wait as long as the backend does, so a long transcription no longer fails at 120 s with an empty error (#2043, #2040)
+- Text-to-speech no longer fails on CPU-only machines: a subprocess engine's synthesis is given the full CPU generate budget instead of being hard-killed at the tighter accelerator "recv timeout" deadline (which existed to reclaim a GPU a CPU-only host doesn't have)
 
 ### CI
 

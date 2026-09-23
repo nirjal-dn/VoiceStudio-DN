@@ -34,6 +34,7 @@ import time
 import weakref
 from urllib.parse import urlsplit
 from utils.containment import contain_system_exit
+from services import spoken_numbers
 
 from abc import ABC, abstractmethod
 from collections import OrderedDict
@@ -1260,9 +1261,24 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     # Fast enough to be a dictation/capture engine when pinned.
     serves_capture = True
 
+    #: Model this engine pins by default. ``None`` keeps FasterWhisper's default
+    #: (large-v3, still honouring ``ASR_MODEL_FASTER``); a subclass sets it to pin
+    #: a specific repo (e.g. the Turbo variant below). ``OMNIVOICE_CS_ASR_MODEL``
+    #: overrides either way.
+    _CS_DEFAULT_MODEL: str | None = None
+
     #: Default decoder priming: Nepali in Devanagari with English words in Latin,
     #: so Whisper keeps embedded English in Latin instead of transliterating it.
-    _DEFAULT_PROMPT = "मैले office को email मा reply गरें। Client सँग meeting भयो।"
+    #: The wider and more domain-varied the Latin vocabulary here, the stronger the
+    #: convention Whisper mimics — a thin prompt only protects the few words it
+    #: names, so common code-switch English (tech, work, money, everyday) is packed
+    #: in to cut down transliteration ("account" → "अकाउन्ट").
+    _DEFAULT_PROMPT = (
+        "मैले office को email मा reply गरें, अनि manager लाई update पठाएँ। "
+        "Client सँग meeting भयो र project को deadline confirm गर्‍यौं। "
+        "मेरो bank account को balance check गरेर online payment गरें। "
+        "Phone मा internet slow थियो, त्यसैले app restart गरेर download गरें।"
+    )
 
     #: OpenAI/faster-whisper's standard temperature-fallback ladder. 0.0 is tried
     #: first (deterministic); higher rungs only fire when a window fails the
@@ -1274,7 +1290,8 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
         # Pinned to Nepali (the notebook forces "ne"); overridable for a
         # different target language.
         self._language = os.environ.get("OMNIVOICE_CS_LANGUAGE", "ne").strip().lower()
-        self._model_name = os.environ.get("OMNIVOICE_CS_ASR_MODEL", self._model_name)
+        default_model = self._CS_DEFAULT_MODEL or self._model_name
+        self._model_name = os.environ.get("OMNIVOICE_CS_ASR_MODEL", default_model)
         try:
             self._beam_size = int(os.environ.get("OMNIVOICE_CS_BEAM_SIZE", "5"))
         except (TypeError, ValueError):
@@ -1284,6 +1301,49 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
         # set to an empty string, disable priming entirely).
         prompt = os.environ.get("OMNIVOICE_CS_PROMPT")
         self._initial_prompt = (self._DEFAULT_PROMPT if prompt is None else prompt).strip() or None
+        # Convert spoken number *words* to digits, each in the script of the
+        # language it was spoken in: English words → ASCII ("nine thousand..." →
+        # 9845), Nepali words → Devanagari ("सन्तानब्बे" → ९७). Bare digits Whisper
+        # already emitted are preserved (their spoken language is unrecoverable).
+        # On by default; set OMNIVOICE_CS_SPOKEN_NUMBERS=0 to keep number words.
+        self._spoken_numbers = os.environ.get(
+            "OMNIVOICE_CS_SPOKEN_NUMBERS", "1"
+        ).strip().lower() not in ("0", "false", "no")
+        # ── Anti-repetition / anti-truncation on long audio ──────────────────
+        # Whisper's greedy pass can fall into a repetition loop: a mild tail loop
+        # (last phrase emitted twice) slips under compression_ratio_threshold so
+        # it survives as "the last few words are repeated", and the looped
+        # segment's overshooting timestamp makes faster-whisper seek past real
+        # speech — so the rest of a long file is never decoded (incomplete
+        # transcript). A soft repetition penalty (>1.0) discourages the loop at
+        # decode time without hard-forbidding the legitimate word repeats/
+        # reduplication that natural Nepali and English contain.
+        self._repetition_penalty = self._parse_float_env(
+            "OMNIVOICE_CS_REPETITION_PENALTY", 1.1)
+        # Hard n-gram block (0 = off). Off by default: it forbids ANY repeated
+        # n-token run, which can clip genuine Nepali reduplication ("बिस्तारै
+        # बिस्तारै"); enable (e.g. 3) only if the soft penalty leaves loops.
+        self._no_repeat_ngram_size = self._parse_int_env(
+            "OMNIVOICE_CS_NO_REPEAT_NGRAM", 0)
+        # Skip silent gaps longer than this (seconds) where Whisper tends to
+        # hallucinate/loop — only honoured on the word-timestamped paths (dub /
+        # file), which is where faster-whisper can locate the gaps. 0 disables.
+        self._hallucination_silence_threshold = self._parse_float_env(
+            "OMNIVOICE_CS_HALLUCINATION_SILENCE_S", 2.0)
+
+    @staticmethod
+    def _parse_float_env(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _parse_int_env(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
 
     @classmethod
     def _parse_temperature(cls, raw):
@@ -1318,14 +1378,54 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             compression_ratio_threshold=2.4,  # retry if output looks repetitive
             log_prob_threshold=-1.0,          # retry if avg token logprob too low
             no_speech_threshold=0.6,          # treat as silence above this
+            # Soft penalty (+ optional hard n-gram block) against the decode
+            # repetition loop that both duplicates the tail and truncates long
+            # files; condition_on_previous_text=False keeps a loop from seeding
+            # the next window.
+            repetition_penalty=self._repetition_penalty,
+            no_repeat_ngram_size=self._no_repeat_ngram_size,
             vad_filter=True,             # built-in Silero VAD — drop non-speech
             vad_parameters=dict(min_silence_duration_ms=500),
             condition_on_previous_text=False,
             initial_prompt=self._initial_prompt,  # keep embedded English in Latin
             word_timestamps=word_timestamps,
+            # Skip silent-gap hallucinations; faster-whisper only locates gaps
+            # with word timestamps, so pass it only then (0 = disabled).
+            **(
+                {"hallucination_silence_threshold": self._hallucination_silence_threshold}
+                if word_timestamps and self._hallucination_silence_threshold
+                else {}
+            ),
         )
         result = self._shape_result(segments_iter, info, word_timestamps)
+        result = self._apply_number_normalization(result)
         return self._collapse_to_single_segment(result)
+
+    def _apply_number_normalization(self, result: dict) -> dict:
+        """Convert spoken number *words* to digits across every text field of the
+        result (full text, per-segment text, per-word tokens).
+
+        Each number is rendered in the script of the language it was spoken in —
+        English words → ASCII (``"nine thousand..."`` → ``9845``), Nepali words →
+        Devanagari (``"सन्तानब्बे"`` → ``९७``) — decided from the number word
+        itself (:func:`spoken_numbers.to_digits`), never from the surrounding
+        sentence. Bare digits Whisper already emitted are left untouched: their
+        spoken language is no longer recoverable, so guessing it would be wrong.
+        Only number words change; other scripts and layout are preserved."""
+        if not self._spoken_numbers:
+            return result
+
+        def conv(s):
+            return spoken_numbers.to_digits(s) if isinstance(s, str) else s
+
+        result["text"] = conv(result.get("text", ""))
+        for seg in result.get("segments", []):
+            seg["text"] = conv(seg.get("text", ""))
+            for w in seg.get("words", []):
+                w["word"] = conv(w.get("word", ""))
+        for ch in result.get("chunks", []):
+            ch["text"] = conv(ch.get("text", ""))
+        return result
 
     @staticmethod
     def _collapse_to_single_segment(result: dict) -> dict:
@@ -1348,6 +1448,24 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
         ]
         result["chunks"] = [{"text": full_text, "timestamp": (start, end)}]
         return result
+
+
+class CodeSwitchWhisperTurboBackend(CodeSwitchWhisperBackend):
+    """Turbo variant of the Nepali↔English code-switch engine.
+
+    Identical code-switch recipe as :class:`CodeSwitchWhisperBackend` (forced
+    ``ne`` decode, mixed-script priming prompt so embedded English stays in
+    Latin, Devanagari-numeral mapping for Nepali-spoken numbers, single-segment
+    dictation collapse) — only the model is swapped to Whisper large-v3 **Turbo**
+    (``deepdml/faster-whisper-large-v3-turbo-ct2``): ~5× faster, 0.8B params, for
+    a lighter/quicker code-switch dictation pass at a small WER cost. Punctuation
+    and English/Nepali word separation come from the shared recipe unchanged.
+    ``OMNIVOICE_CS_ASR_MODEL`` still overrides the pinned model.
+    """
+
+    id = "whisper-ne-en-turbo"
+    display_name = "Whisper large-v3 Turbo — Nepali+English code-switch (single-pass)"
+    _CS_DEFAULT_MODEL = "deepdml/faster-whisper-large-v3-turbo-ct2"
 
 
 # ── MLX Whisper (Apple Silicon optional) ────────────────────────────────────
@@ -2791,6 +2909,7 @@ _REGISTRY: dict[str, type[ASRBackend]] = _LazyASRRegistry({
     "openai-compat-asr": OpenAICompatASRBackend,
     "auto-lang":       AutoLangASRBackend,
     "whisper-ne-en":   CodeSwitchWhisperBackend,
+    "whisper-ne-en-turbo": CodeSwitchWhisperTurboBackend,
     # "faster-whisper-isolated": resolved lazily (crash-isolated subprocess).
 })
 
@@ -2840,6 +2959,13 @@ _INSTALL_HINTS: dict[str, str] = {
         "English in Latin so it is never mis-read as Hindi. Pin a different "
         "language with OMNIVOICE_CS_LANGUAGE (default 'ne')."
     ),
+    "whisper-ne-en-turbo": (
+        "No extra install (reuses faster-whisper, Turbo weights). Same "
+        "Nepali↔English code-switch recipe as whisper-ne-en on the large-v3 "
+        "Turbo model: ~5× faster and 0.8B params for quicker dictation at a "
+        "small accuracy cost. Downloads deepdml/faster-whisper-large-v3-turbo-ct2 "
+        "(~1.6 GB) on first use."
+    ),
     "auto-lang": (
         "No extra install. Routes each recording by its detected language: "
         "Nepali → IndicConformer (Devanagari-native), everything else → the "
@@ -2865,6 +2991,7 @@ _INSTALL_PACKAGES: dict[str, str] = {
     # Code-switch is a thin Faster-Whisper specialization; installing the
     # shared package is all it needs.
     "whisper-ne-en":   "faster-whisper",
+    "whisper-ne-en-turbo": "faster-whisper",
     "mlx-whisper": "mlx-whisper",
     "moonshine": "moonshine-onnx",
     "funasr": "funasr",

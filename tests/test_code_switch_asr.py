@@ -99,6 +99,60 @@ def test_decoding_uses_notebook_params(monkeypatch):
     assert kw["condition_on_previous_text"] is False
 
 
+def test_anti_repetition_defaults(monkeypatch):
+    # A soft repetition penalty (>1.0) is on by default so the greedy pass does
+    # not loop — the loop is what both duplicates the tail and (via its
+    # overshooting timestamp) truncates long files. The hard n-gram block stays
+    # off so legitimate reduplication is not clipped.
+    for e in ("OMNIVOICE_CS_REPETITION_PENALTY", "OMNIVOICE_CS_NO_REPEAT_NGRAM"):
+        monkeypatch.delenv(e, raising=False)
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    kw = bk._model.transcribe_kwargs
+    assert kw["repetition_penalty"] == 1.1
+    assert kw["no_repeat_ngram_size"] == 0
+    # condition_on_previous_text stays False so a loop can't seed the next window.
+    assert kw["condition_on_previous_text"] is False
+
+
+def test_anti_repetition_env_overrides(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_REPETITION_PENALTY", "1.3")
+    monkeypatch.setenv("OMNIVOICE_CS_NO_REPEAT_NGRAM", "3")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    kw = bk._model.transcribe_kwargs
+    assert kw["repetition_penalty"] == 1.3
+    assert kw["no_repeat_ngram_size"] == 3
+
+
+def test_repetition_penalty_env_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_REPETITION_PENALTY", "not-a-number")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["repetition_penalty"] == 1.1
+
+
+def test_hallucination_threshold_only_with_word_timestamps(monkeypatch):
+    # faster-whisper can only locate silent gaps when it has word timestamps, so
+    # the hallucination-skip is passed then and omitted otherwise (passing it
+    # without word timestamps is a no-op at best, an error at worst).
+    monkeypatch.delenv("OMNIVOICE_CS_HALLUCINATION_SILENCE_S", raising=False)
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav", word_timestamps=True)
+    assert bk._model.transcribe_kwargs["hallucination_silence_threshold"] == 2.0
+
+    bk2 = _backend_with("नमस्ते")
+    bk2.transcribe("x.wav", word_timestamps=False)
+    assert "hallucination_silence_threshold" not in bk2._model.transcribe_kwargs
+
+
+def test_hallucination_threshold_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_HALLUCINATION_SILENCE_S", "0")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav", word_timestamps=True)
+    assert "hallucination_silence_threshold" not in bk._model.transcribe_kwargs
+
+
 def test_temperature_env_forces_greedy(monkeypatch):
     monkeypatch.setenv("OMNIVOICE_CS_TEMPERATURE", "0.0")
     bk = _backend_with("नमस्ते")
@@ -152,36 +206,43 @@ def test_beam_size_env_invalid_falls_back_to_default(monkeypatch):
     assert bk._model.transcribe_kwargs["beam_size"] == 5
 
 
+# ── Bare digits are PRESERVED — never guessed from surrounding script ─────────
+# The spoken language of a number Whisper already wrote as digits is not
+# recoverable from the transcript, so the digits are left exactly as-is. Only
+# number *words* are converted (see the section below), each in its own script.
+
 @pytest.mark.parametrize("text", [
-    "नमस्ते",                                             # pure Nepali
-    "hello world",                                        # pure English
-    "नमस्ते, मेरो account को balance कति छ?",              # mixed Nepali+English
-    "मेरो account मा Rs. 5000 छ",                          # price (Latin + Devanagari)
-    "आज 2081-05-15 मा meeting छ at 3 PM",                 # date + number + English
-    "मैले 25 percent discount पाएँ",                       # number + English word
+    "नमस्ते",                                          # pure Nepali, no numbers
+    "hello world",                                     # pure English, no numbers
+    "नमस्ते, मेरो account को balance कति छ?",            # mixed, no digits
+    "मलाई 100 रुपैयाँ चाहियो",                          # bare digits in a Nepali sentence
+    "मेरो balance 9845 छ",                             # English amount in a Nepali sentence
+    "आज 2081-05-15 मा meeting छ",                       # date
+    "at 3 PM",
+    "version 2.0 release भयो",
 ])
-def test_one_complete_transcript_scripts_and_numbers_verbatim(monkeypatch, text):
-    # The backend must not transliterate, translate, split, or strip either
-    # script / digits — the whole mixed string round-trips as ONE transcript.
-    bk = _backend_with(text)
-    out = bk.transcribe("x.wav")
+def test_bare_digits_are_preserved(text):
+    # No number words → nothing changes. Digits are NOT flipped to Devanagari
+    # just because the sentence is Nepali — that would corrupt an English amount
+    # ("9845" must never become "९८४५"). The transcript round-trips verbatim.
+    out = _backend_with(text).transcribe("x.wav")
     assert out["text"] == text
     assert out["segments"][0]["text"] == text
     assert out["chunks"][0]["text"] == text
 
 
-def test_whole_recording_collapses_to_one_segment(monkeypatch):
+def test_whole_recording_collapses_to_one_segment():
     # Whisper's VAD splits a recording into several utterance segments; the
     # dictation engine must return ONE continuous transcript spanning start→stop.
     bk = _backend_with([
         "नमस्ते, मेरो account को balance कति छ?",   # 0.0–1.0
-        "Please transfer Rs. 5000 today.",           # 1.0–2.0
-        "धन्यवाद।",                                    # 2.0–3.0
+        "Please transfer Rs. 5000 today.",           # 1.0–2.0 (bare digits kept)
+        "मैले ५ मा 10 पैसा दिएँ।",                     # 2.0–3.0 (bare digits kept)
     ])
     out = bk.transcribe("x.wav")
     expected = (
         "नमस्ते, मेरो account को balance कति छ? "
-        "Please transfer Rs. 5000 today. धन्यवाद।"
+        "Please transfer Rs. 5000 today. मैले ५ मा 10 पैसा दिएँ।"
     )
     assert out["text"] == expected            # single continuous transcript
     assert len(out["segments"]) == 1          # not broken into segments
@@ -203,6 +264,90 @@ def test_registered_and_is_faster_whisper_subclass():
     assert ab._REGISTRY["whisper-ne-en"] is ab.CodeSwitchWhisperBackend
     assert issubclass(ab.CodeSwitchWhisperBackend, ab.FasterWhisperBackend)
     assert ab.CodeSwitchWhisperBackend.serves_capture is True
+
+
+# ── Spoken number WORDS → digits, in the spoken language's script ────────────
+# Whisper emits numbers as words as often as digits; the engine converts them to
+# digits, Devanagari for Nepali-spoken and Western for English-spoken (the digit
+# glyphs then follow context exactly as the digit-script tests above check).
+
+@pytest.mark.parametrize("text,expected", [
+    # Nepali number words → Devanagari digits (the spec example; the comma keeps
+    # the two numbers apart).
+    ("सन्तानब्बे, एकचालिस", "९७, ४१"),
+    ("मलाई एक सय रुपैयाँ चाहियो", "मलाई १०० रुपैयाँ चाहियो"),
+    ("दुई हजार एकासी साल", "२०८१ साल"),
+    # English number words → Western digits (the spec example).
+    ("nine thousand eight hundred forty-five dollars", "9845 dollars"),
+    ("twenty five percent discount", "25 percent discount"),
+    ("एक सय पच्चीस", "१२५"),
+    # Code-switched: each number renders in the script of the language it was
+    # spoken in, within one sentence.
+    ("मलाई एक सय रुपैयाँ र five dollars चाहियो",
+     "मलाई १०० रुपैयाँ र 5 dollars चाहियो"),
+    # The exact spec sentences: same surrounding Nepali, different spoken number
+    # language → English words stay ASCII, Nepali words become Devanagari.
+    ("मेरो account को balance nine thousand eight hundred forty five छ।",
+     "मेरो account को balance 9845 छ।"),
+    ("मेरो account को balance सन्तानब्बे छ।",
+     "मेरो account को balance ९७ छ।"),
+])
+def test_spoken_number_words_become_digits(monkeypatch, text, expected):
+    monkeypatch.delenv("OMNIVOICE_CS_SPOKEN_NUMBERS", raising=False)
+    out = _backend_with(text).transcribe("x.wav")
+    assert out["text"] == expected
+    assert out["segments"][0]["text"] == expected
+
+
+def test_copula_chha_is_not_turned_into_a_number(monkeypatch):
+    # "छ" is both "six" and the copula "is"; a standalone/trailing छ must survive
+    # so ordinary Nepali is not corrupted ("उमेर पच्चीस छ" = "age is twenty-five").
+    monkeypatch.delenv("OMNIVOICE_CS_SPOKEN_NUMBERS", raising=False)
+    out = _backend_with("मेरो उमेर पच्चीस छ").transcribe("x.wav")
+    assert out["text"] == "मेरो उमेर २५ छ"
+
+
+def test_spoken_numbers_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_SPOKEN_NUMBERS", "0")
+    text = "सन्तानब्बे, एकचालिस"
+    out = _backend_with(text).transcribe("x.wav")
+    assert out["text"] == text  # number words kept verbatim
+
+
+def test_default_prompt_protects_common_english_words():
+    # English words must stay Latin, not be transliterated to Devanagari
+    # ("office" → "अफिस"). The mixed-script priming prompt is the model-side
+    # nudge; assert the common code-switch English it names is present so the
+    # protection isn't silently dropped by a prompt edit.
+    prompt = ab.CodeSwitchWhisperBackend._DEFAULT_PROMPT
+    for word in ("office", "email", "meeting"):
+        assert word in prompt
+    # And it genuinely mixes scripts (Latin words inside Devanagari).
+    assert any("ऀ" <= ch <= "ॿ" for ch in prompt)
+
+
+# ── Turbo variant ────────────────────────────────────────────────────────────
+
+
+def test_turbo_registered_and_reuses_code_switch_recipe():
+    assert ab._REGISTRY["whisper-ne-en-turbo"] is ab.CodeSwitchWhisperTurboBackend
+    assert issubclass(ab.CodeSwitchWhisperTurboBackend, ab.CodeSwitchWhisperBackend)
+    assert ab.CodeSwitchWhisperTurboBackend.serves_capture is True
+
+
+def test_turbo_pins_the_turbo_model(monkeypatch):
+    pytest.importorskip("faster_whisper")
+    monkeypatch.delenv("OMNIVOICE_CS_ASR_MODEL", raising=False)
+    bk = ab.CodeSwitchWhisperTurboBackend()
+    assert bk._model_name == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    # Base variant is unaffected — still large-v3.
+    assert ab.CodeSwitchWhisperBackend()._model_name != bk._model_name
+
+
+def test_turbo_model_env_override_wins(monkeypatch):
+    pytest.importorskip("faster_whisper")
+    monkeypatch.setenv("OMNIVOICE_CS_ASR_MODEL", "custom/ct2-turbo")
+    assert ab.CodeSwitchWhisperTurboBackend()._model_name == "custom/ct2-turbo"
 
 
 # ── Optional: real-audio integration (opt-in; needs the model + clips) ──────
