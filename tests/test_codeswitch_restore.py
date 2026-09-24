@@ -162,3 +162,77 @@ async def test_async_wrapper(monkeypatch):
     _fake_llm(monkeypatch, "मेरो account।")
     out = await cs.maybe_restore_codeswitch_async(src)
     assert out == "मेरो account।"
+
+
+# ── full normalization (indic-conformer-qwen path) ───────────────────────────
+# The relaxed guard permits spelling + number edits the strict subsequence guard
+# forbids, while still failing wholesale translation and runaway length closed.
+
+def _fake_normalizer(monkeypatch, output: str):
+    monkeypatch.setattr(
+        cs, "normalize_transcript", lambda text, **kw: cs._strip_wrapping(output)
+    )
+
+
+def test_normalization_sane_allows_spelling_fix():
+    # A corrected matra adds/changes Devanagari — strict guard would reject; the
+    # relaxed guard accepts (within length + retention bounds).
+    assert cs._normalization_sane("बिस्तारै जानुहोस", "बिस्तारै जानुहोस्।") is True
+
+
+def test_normalization_sane_allows_number_digitisation():
+    assert cs._normalization_sane("मलाई पाँच वटा चाहियो", "मलाई ५ वटा चाहियो।") is True
+
+
+def test_normalization_sane_rejects_full_translation():
+    # All Devanagari dropped → below the retention floor → rejected.
+    assert cs._normalization_sane("मेरो नाम राम हो", "My name is Ram.") is False
+
+
+def test_normalization_sane_rejects_runaway_length():
+    assert cs._normalization_sane("नमस्ते", "नमस्ते " * 20) is False
+
+
+def test_normalization_sane_rejects_empty_output():
+    assert cs._normalization_sane("नमस्ते", "") is False
+
+
+def test_maybe_normalize_latinizes_and_digitises(monkeypatch):
+    src = "मेरो अकाउन्टमा पाँच हजार रुपैयाँ छ"
+    _fake_normalizer(monkeypatch, "मेरो account मा ५००० रुपैयाँ छ।")
+    out = cs.maybe_normalize_transcript(src)
+    assert out == "मेरो account मा ५००० रुपैयाँ छ।"
+
+
+def test_maybe_normalize_is_not_env_gated(monkeypatch):
+    # Unlike restore, normalization runs even with the restore env var OFF —
+    # the engine is the opt-in, not the env.
+    monkeypatch.delenv("OMNIVOICE_CODESWITCH_RESTORE", raising=False)
+    _fake_normalizer(monkeypatch, "मेरो account।")
+    assert cs.maybe_normalize_transcript("मेरो अकाउन्ट") == "मेरो account।"
+
+
+def test_maybe_normalize_no_devanagari_skips(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("normalizer must not run on non-Devanagari input")
+    monkeypatch.setattr(cs, "normalize_transcript", _boom)
+    assert cs.maybe_normalize_transcript("hello world 123") is None
+
+
+def test_maybe_normalize_translation_rejected(monkeypatch):
+    _fake_normalizer(monkeypatch, "My name is Ram.")
+    assert cs.maybe_normalize_transcript("मेरो नाम राम हो") is None
+
+
+def test_maybe_normalize_failure_is_passthrough(monkeypatch):
+    def _raise(*a, **k):
+        raise RuntimeError("model exploded")
+    monkeypatch.setattr(cs, "normalize_transcript", _raise)
+    assert cs.maybe_normalize_transcript("मेरो account") is None
+
+
+@pytest.mark.asyncio
+async def test_maybe_normalize_async(monkeypatch):
+    _fake_normalizer(monkeypatch, "मेरो account।")
+    out = await cs.maybe_normalize_transcript_async("मेरो अकाउन्ट")
+    assert out == "मेरो account।"

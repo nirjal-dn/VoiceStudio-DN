@@ -21,6 +21,7 @@ CURATED_REVISIONS: dict[str, str] = {
     "mlx-community/whisper-large-v3-turbo": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
     "openai/whisper-large-v2": "ae4642769ce2ad8fc292556ccea8e901f1530655",
     "ai4bharat/indic-conformer-600m-multilingual": "e9b71b369c048e2c6b634d4c131061c34e441179",
+    "Qwen/Qwen2.5-1.5B-Instruct-GGUF": "91cad51170dc346986eccefdc2dd33a9da36ead9",
     "Oshara/xtts-v2-nepali": "1ef72e4a13e201409a895ef45c36b38adbe324d8",
     "ai4bharat/indic-parler-tts": "7b527af5ee8ed1f9a28d80b19703ed9bb8ba10ca",
     "openai/whisper-large-v3": "06f233fe06e710322aca913c1bc4249a0d71fce1",

@@ -152,9 +152,53 @@ def _isolated_engine_hint(streak: int) -> str:
     )
 
 
+def _probe_audio_seconds(path: str) -> float | None:
+    """Best-effort audio duration (seconds) from the container header via PyAV
+    — no ffmpeg CLI (this may be a host without one) and no full decode. Returns
+    None when it can't be determined; callers then keep the flat timeout floor.
+    PyAV ships with faster-whisper (its ``av`` dependency), so it's always
+    importable on any host that has a Whisper ASR engine."""
+    try:
+        import av
+
+        with av.open(path) as container:
+            if container.duration:  # microseconds (AV_TIME_BASE)
+                return container.duration / 1_000_000.0
+            st = next((s for s in container.streams if s.type == "audio"), None)
+            if st is not None and st.duration and st.time_base:
+                return float(st.duration * st.time_base)
+    except Exception:  # noqa: BLE001 — a probe must never break transcribe
+        return None
+    return None
+
+
+def _effective_transcribe_timeout(timeout: float, audio_seconds: float | None) -> float:
+    """Grow the wall-clock bound for long audio.
+
+    A flat cap abandons a *legitimately* long file: on a CPU-only host large-v3
+    runs slower than realtime, so a multi-minute recording honestly needs more
+    than the 300s floor and was being killed mid-decode even though nothing was
+    wedged (#capture-long-audio). The budget should track the audio's DURATION,
+    not a constant. A hang on a short clip still trips at ``timeout``; a long
+    file gets ``max(timeout, audio_seconds * RTF)``. ``OMNIVOICE_ASR_TIMEOUT_RTF``
+    (default 12) is the seconds of compute allowed per second of audio — well
+    above large-v3's real CPU cost (~1-5x realtime) so real work finishes, while
+    still bounding a truly stuck call to a multiple of the clip length."""
+    if not audio_seconds or audio_seconds <= 0:
+        return timeout
+    try:
+        rtf = float(os.environ.get("OMNIVOICE_ASR_TIMEOUT_RTF", "12"))
+    except (TypeError, ValueError):
+        rtf = 12.0
+    if rtf <= 0:
+        return timeout
+    return max(timeout, audio_seconds * rtf)
+
+
 async def run_transcribe_guarded(executor, fn, *, what: str = "ASR",
                                  timeout: float = ASR_TRANSCRIBE_TIMEOUT_S,
                                  timeout_env: str = "OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S",
+                                 audio_seconds: float | None = None,
                                  reset_on_timeout: bool = False,
                                  on_abandon=None):
     """Run a blocking transcribe ``fn`` in ``executor`` with a hard wall-clock
@@ -174,6 +218,10 @@ async def run_transcribe_guarded(executor, fn, *, what: str = "ASR",
     completion leaves cleanup with the caller.
     """
     loop = asyncio.get_running_loop()
+    # Long audio legitimately needs time proportional to its length (esp. on a
+    # slow CPU host); grow the flat floor so a long-but-progressing decode isn't
+    # abandoned as if it were wedged.
+    timeout = _effective_transcribe_timeout(timeout, audio_seconds)
     # Same SystemExit containment as the TTS pool (#1133 class): an ASR
     # dependency written as a CLI must not be able to shut the backend down.
     inner = contain_system_exit(fn, what)
@@ -232,14 +280,17 @@ async def run_transcribe_guarded(executor, fn, *, what: str = "ASR",
         streak = _note_transcribe_timeout()
         msg = (
             f"{what} transcription exceeded {timeout:.0f}s and was abandoned — "
-            "the backend is running, but the ASR model is too heavy for the "
-            "available compute. Most often the GPU is VRAM-starved: the resident "
-            "TTS model and a large ASR model (large-v3) contend for memory. "
-            "The native call cannot be killed safely, so its capacity remains "
-            "reserved until it exits. For a durable fix Flush the "
-            "TTS model to free VRAM, pick a smaller ASR model in "
-            f"the engine's Weights list in Model Catalogue, or set ASR to CPU. (Raise {timeout_env} "
-            "for very long transcribes.)"
+            "the backend is running, but the ASR model did not finish in time. "
+            "On a CPU-only host a large model (large-v3) is slower than realtime, "
+            "so a long recording can genuinely need this long; on a GPU host the "
+            "model may be VRAM-starved (the resident TTS model and a large ASR "
+            "model contend for memory). The native call cannot be killed safely, "
+            "so its capacity stays reserved until it exits. To fix: pick a "
+            "smaller or Turbo ASR model in the engine's Weights list in Model "
+            "Catalogue, or (on a GPU) Flush the TTS model to free VRAM. The time "
+            "budget already scales with audio length — for very long files raise "
+            f"{timeout_env} (the flat floor) or OMNIVOICE_ASR_TIMEOUT_RTF (the "
+            "per-audio-second allowance, default 12)."
         )
         hint = _isolated_engine_hint(streak)
         if hint:
@@ -1238,6 +1289,13 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     code-switched audio whose labels keep English in Latin (see
     ``scripts/finetune_whisper_ne_en.py``).
 
+    ``hotwords`` (``OMNIVOICE_CS_HOTWORDS``) is a stronger, every-window Latin
+    nudge, but **off by default**: unlike ``initial_prompt`` (which only
+    conditions the first ~30s window) faster-whisper re-injects hotwords into
+    every window, and a standing English vocabulary there biases the decode so
+    hard that ordinary Nepali comes out in English script. Opt in only for a
+    handful of domain terms you need kept in Latin, accepting the English bias.
+
     Nepali accuracy is tuned by Whisper's own temperature-fallback ladder
     (``temperature=[0.0, 0.2, … 1.0]``): a greedy 0.0 pass is kept when it looks
     healthy, but when a window collapses into a repetition loop or low-confidence
@@ -1252,6 +1310,9 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
     pin English), ``OMNIVOICE_CS_BEAM_SIZE`` (default ``5``),
     ``OMNIVOICE_CS_ASR_MODEL`` (default the inherited faster-whisper large-v3),
     ``OMNIVOICE_CS_PROMPT`` (the mixed-script priming text; set empty to disable),
+    ``OMNIVOICE_CS_HOTWORDS`` (off by default; a few domain terms to keep in
+    Latin every window — a broad list makes Nepali decode in English script),
+    ``OMNIVOICE_CS_NO_REPEAT_NGRAM`` (hard anti-loop n-gram block, default 3),
     ``OMNIVOICE_CS_TEMPERATURE`` (a single float to force greedy-only decoding, or
     a comma list to customise the fallback ladder; default is the standard ladder).
     """
@@ -1301,6 +1362,16 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
         # set to an empty string, disable priming entirely).
         prompt = os.environ.get("OMNIVOICE_CS_PROMPT")
         self._initial_prompt = (self._DEFAULT_PROMPT if prompt is None else prompt).strip() or None
+        # hotwords are OFF by default. faster-whisper re-injects them into EVERY
+        # decode window, so a standing English vocabulary biases a forced-`ne`
+        # decode so hard toward Latin that it transcribes ordinary *Nepali*
+        # speech in English script — a far worse regression than the mild
+        # long-audio "some English words drift to Devanagari past the first 30s"
+        # it was meant to fix (initial_prompt already primes the first window).
+        # hotwords are for a handful of domain terms, not a general vocabulary:
+        # opt in with OMNIVOICE_CS_HOTWORDS (space-separated) only if you need
+        # the every-window Latin nudge and accept the English bias it carries.
+        self._hotwords = (os.environ.get("OMNIVOICE_CS_HOTWORDS") or "").strip() or None
         # Convert spoken number *words* to digits, each in the script of the
         # language it was spoken in: English words → ASCII ("nine thousand..." →
         # 9845), Nepali words → Devanagari ("सन्तानब्बे" → ९७). Bare digits Whisper
@@ -1320,11 +1391,17 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
         # reduplication that natural Nepali and English contain.
         self._repetition_penalty = self._parse_float_env(
             "OMNIVOICE_CS_REPETITION_PENALTY", 1.1)
-        # Hard n-gram block (0 = off). Off by default: it forbids ANY repeated
-        # n-token run, which can clip genuine Nepali reduplication ("बिस्तारै
-        # बिस्तारै"); enable (e.g. 3) only if the soft penalty leaves loops.
+        # Hard n-gram block: forbid any decoded n-token run from repeating
+        # back-to-back. Default 3 — the soft repetition_penalty alone left tail
+        # loops that both duplicated the last phrase and (via the looped
+        # segment's overshooting timestamp) made faster-whisper seek past real
+        # speech, so the rest of a long file was never decoded (incomplete
+        # transcript). A 3-gram block kills those loops while leaving genuine
+        # Nepali reduplication intact: "बिस्तारै बिस्तारै" / "छिटो छिटो" are
+        # 2-token repeats, below the 3-token bar. Set 0 to disable, or a lower
+        # value only if a specific loop slips a 3-gram.
         self._no_repeat_ngram_size = self._parse_int_env(
-            "OMNIVOICE_CS_NO_REPEAT_NGRAM", 0)
+            "OMNIVOICE_CS_NO_REPEAT_NGRAM", 3)
         # Skip silent gaps longer than this (seconds) where Whisper tends to
         # hallucinate/loop — only honoured on the word-timestamped paths (dub /
         # file), which is where faster-whisper can locate the gaps. 0 disables.
@@ -1388,6 +1465,10 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             vad_parameters=dict(min_silence_duration_ms=500),
             condition_on_previous_text=False,
             initial_prompt=self._initial_prompt,  # keep embedded English in Latin
+            # Re-primed on EVERY window (initial_prompt only primes the first),
+            # so English stays Latin across the whole recording, not just its
+            # first 30s. None when priming is disabled.
+            hotwords=self._hotwords,
             word_timestamps=word_timestamps,
             # Skip silent-gap hallucinations; faster-whisper only locates gaps
             # with word timestamps, so pass it only then (0 = disabled).
@@ -1398,8 +1479,45 @@ class CodeSwitchWhisperBackend(FasterWhisperBackend):
             ),
         )
         result = self._shape_result(segments_iter, info, word_timestamps)
+        result = self._drop_looped_segments(result)
         result = self._apply_number_normalization(result)
         return self._collapse_to_single_segment(result)
+
+    @staticmethod
+    def _drop_looped_segments(result: dict) -> dict:
+        """Drop consecutive VAD segments whose text is identical.
+
+        The Whisper tail-repetition loop emits the same utterance two-or-more
+        times back-to-back as separate segments — that both duplicates the tail
+        of the transcript ("some transcript at the last is being repeated") and,
+        because the looped segment's timestamp overshoots, makes faster-whisper
+        seek past real speech so a long file never finishes decoding. Two
+        adjacent segments decoding byte-identical text is a loop artifact, not
+        natural speech, in any language, so the run is collapsed to one. ``text``
+        and ``chunks`` are rebuilt from the kept segments so every field stays
+        consistent before number-normalisation and the single-segment collapse.
+        """
+        segs = result.get("segments") or []
+        if len(segs) < 2:
+            return result
+        kept: list[dict] = []
+        for seg in segs:
+            key = (seg.get("text") or "").strip()
+            if kept and key and (kept[-1].get("text") or "").strip() == key:
+                continue  # ponytail: exact-adjacent dups only; an A B A B
+                # alternating loop would survive — add n-gram-over-segments if seen.
+            kept.append(seg)
+        if len(kept) == len(segs):
+            return result
+        result["segments"] = kept
+        result["text"] = " ".join(
+            (s.get("text") or "").strip() for s in kept if (s.get("text") or "").strip()
+        ).strip()
+        result["chunks"] = [
+            {"text": s.get("text", ""), "timestamp": (s.get("start"), s.get("end"))}
+            for s in kept
+        ]
+        return result
 
     def _apply_number_normalization(self, result: dict) -> dict:
         """Convert spoken number *words* to digits across every text field of the
@@ -2854,6 +2972,91 @@ class AutoLangASRBackend(ASRBackend):
         self._indic = None
 
 
+class IndicConformerQwenBackend(ASRBackend):
+    """IndicConformer transcription with automatic Qwen normalization.
+
+    Pipeline, continuous and with no manual step:
+    ``Audio → IndicConformer → Qwen normalization → final transcript``.
+
+    IndicConformer returns pure Devanagari, so English words the speaker
+    code-switched come back spelled phonetically ("अकाउन्ट" for "account"),
+    there's no punctuation, and spoken numbers stay as words. This engine runs
+    that raw transcript through the local Qwen instruction model
+    (``services.codeswitch_restore``) to Latinize the English, correct obvious
+    slips, digitize spoken numbers, and add punctuation — while keeping genuine
+    Nepali in Devanagari. The normalized text becomes the final transcript; the
+    raw IndicConformer text is kept in ``raw_text`` (and logged) for debugging.
+
+    The plain ``indic-conformer`` engine is untouched — pick this one when you
+    want the normalized output. Normalization is best-effort: if the Qwen model
+    isn't installed or the guard rejects the output, the raw transcript stands.
+    """
+
+    id = "indic-conformer-qwen"
+    display_name = "IndicConformer + Qwen normalization (Nepali/English)"
+    gpu_compat = ("cpu",)
+    serves_capture = True
+    whole_recording = True
+    accepts_language = True
+
+    def __init__(self):
+        self._indic: "ASRBackend | None" = None
+
+    @property
+    def model_repo_id(self):  # noqa: D401 — the weights the preflight/catalogue install
+        return _indic_conformer().model_repo_id
+
+    @classmethod
+    def is_available(cls) -> tuple[bool, str]:
+        indic_cls = _indic_conformer()
+        try:
+            ok, msg = indic_cls.is_available()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"IndicConformer unavailable ({exc})."
+        if not ok:
+            return False, msg
+        try:
+            import llama_cpp  # noqa: F401
+        except Exception:  # noqa: BLE001 — the codeswitch extra isn't installed
+            return False, (
+                "Qwen normalization needs llama-cpp-python — install with: "
+                "uv sync --extra codeswitch. (Plain IndicConformer works without it.)"
+            )
+        return True, msg  # carries IndicConformer's own first-use-download note
+
+    def _indic_backend(self) -> "ASRBackend":
+        if self._indic is None:
+            self._indic = _indic_conformer()()
+        return self._indic
+
+    def ensure_loaded(self) -> None:
+        self._indic_backend().ensure_loaded()
+
+    def transcribe(self, audio_path: str, *, word_timestamps: bool = True, language=None) -> dict:
+        result = self._indic_backend().transcribe(
+            audio_path, word_timestamps=word_timestamps, language=language,
+        )
+        raw = result.get("text") or ""
+        result["raw_text"] = raw
+        if raw.strip():
+            from services.codeswitch_restore import maybe_normalize_transcript
+
+            normalized = maybe_normalize_transcript(raw)
+            if normalized:
+                logger.debug("indic-conformer-qwen: raw=%r normalized=%r", raw, normalized)
+                result["text"] = normalized
+        # segments/chunks stay raw — their timings are IndicConformer's, truthful.
+        return result
+
+    def unload(self) -> None:
+        if self._indic is not None:
+            try:
+                self._indic.unload()
+            except Exception:  # noqa: BLE001
+                pass
+            self._indic = None
+
+
 class _LazyASRRegistry(dict):
     """Registry with lazily-resolved entries (Wave 4.2). Mirrors the TTS
     registry's lazy pattern so listing/selecting the crash-isolated ASR
@@ -2910,6 +3113,7 @@ _REGISTRY: dict[str, type[ASRBackend]] = _LazyASRRegistry({
     "auto-lang":       AutoLangASRBackend,
     "whisper-ne-en":   CodeSwitchWhisperBackend,
     "whisper-ne-en-turbo": CodeSwitchWhisperTurboBackend,
+    "indic-conformer-qwen": IndicConformerQwenBackend,
     # "faster-whisper-isolated": resolved lazily (crash-isolated subprocess).
 })
 
@@ -2979,6 +3183,15 @@ _INSTALL_HINTS: dict[str, str] = {
         "accept its terms on Hugging Face and set an HF token. Language via "
         "OMNIVOICE_INDIC_CONFORMER_LANG (default ne); output is in the "
         "language's native script."
+    ),
+    "indic-conformer-qwen": (
+        "IndicConformer transcription, then automatic Qwen normalization "
+        "(Audio → IndicConformer → Qwen → final): Latinizes code-switched "
+        "English, corrects obvious slips, digitizes spoken numbers, and adds "
+        "punctuation while keeping Nepali in Devanagari. Needs the IndicConformer "
+        "weights (~2.4 GB, gated) plus the Qwen GGUF (~1 GB, first use) and the "
+        "codeswitch extra: uv sync --extra codeswitch. Falls back to the raw "
+        "transcript if Qwen is unavailable."
     ),
 }
 

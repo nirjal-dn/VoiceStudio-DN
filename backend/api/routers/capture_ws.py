@@ -1241,7 +1241,14 @@ async def _transcribe_buffer_full(
 
     try:
         from services.model_manager import _gpu_pool
-        from services.asr_backend import get_capture_asr_backend, run_transcribe_guarded
+        from services.asr_backend import (
+            _probe_audio_seconds,
+            get_capture_asr_backend,
+            run_transcribe_guarded,
+        )
+        # Scale the transcribe budget with the recording length so a long
+        # dictation on a slow (esp. CPU-only) host isn't abandoned mid-decode.
+        audio_seconds = await asyncio.to_thread(_probe_audio_seconds, tmp)
 
         def _run():
             backend = get_capture_asr_backend(skip_sherpa=skip_sherpa)
@@ -1282,7 +1289,9 @@ async def _transcribe_buffer_full(
 
         # Bounded + pool-resetting on timeout (#730), same rationale as the
         # partial path above.
-        return await run_transcribe_guarded(_gpu_pool, _run, what="Dictation")
+        return await run_transcribe_guarded(
+            _gpu_pool, _run, what="Dictation", audio_seconds=audio_seconds,
+        )
     finally:
         try:
             os.unlink(tmp)

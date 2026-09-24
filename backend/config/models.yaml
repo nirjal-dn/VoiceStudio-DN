@@ -120,9 +120,19 @@ models:
   - repo_id: "ai4bharat/indic-conformer-600m-multilingual"
     label: "IndicConformer 600M (Nepali + 21 Indian languages, CPU)"
     role: ASR
-    engines: [indic-conformer]
+    engines: [indic-conformer, indic-conformer-qwen]
     size_gb: 2.4
     note: "Gated on Hugging Face: accept the model terms and set a Hugging Face token (Settings → API Keys) before installing. MIT licence."
+
+  - repo_id: "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+    label: "Qwen2.5-1.5B Instruct Q4_K_M (transcript normalization, CPU)"
+    role: ASR
+    engines: [indic-conformer-qwen]
+    size_gb: 1.0
+    curated_on: [cuda, rocm, cpu, darwin-arm64, darwin-x86_64]
+    allow_patterns:
+      - "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    note: "Normalizes IndicConformer transcripts (Latinizes code-switched English, digitizes spoken numbers, adds punctuation) for the 'IndicConformer + Qwen normalization' engine. Needs the codeswitch extra (uv sync --extra codeswitch). Apache-2.0. Override with OMNIVOICE_CODESWITCH_MODEL_REPO/FILE/PATH."
 
   - repo_id: "mlx-community/whisper-tiny-mlx"
     label: "Whisper tiny (MLX ASR — fast fallback)"

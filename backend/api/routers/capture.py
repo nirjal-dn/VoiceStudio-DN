@@ -133,12 +133,17 @@ async def transcribe_audio(
             ASRLanguageNotSupportedError,
             ASRModelMissingError,
             ASRTimeoutError,
+            _probe_audio_seconds,
             run_transcribe_guarded,
         )
+        # Scale the transcribe budget with the recording length: a long file on
+        # a slow (esp. CPU-only) host honestly needs more than the flat 300s
+        # floor, and must not be abandoned as if the model were wedged.
+        audio_seconds = await asyncio.to_thread(_probe_audio_seconds, tmp.name)
         t0 = time.perf_counter()
         try:
             result, engine_id = await run_transcribe_guarded(
-                _gpu_pool, _run, what="Dictation",
+                _gpu_pool, _run, what="Dictation", audio_seconds=audio_seconds,
             )
         except ASRTimeoutError as e:
             # Backend is alive — ASR couldn't finish. 504 with guidance, not a

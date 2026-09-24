@@ -22,6 +22,7 @@ from services import asr_backend  # noqa: E402
 from services.asr_backend import (  # noqa: E402
     ASRTimeoutError,
     ASR_TRANSCRIBE_TIMEOUT_S,
+    _effective_transcribe_timeout,
     reset_pool_after_wedge,
     run_transcribe_guarded,
 )
@@ -40,6 +41,56 @@ def _fresh_timeout_streak(monkeypatch):
 def test_default_timeout_is_env_overridable(monkeypatch):
     # The constant is read at import; just assert it's a sane positive default.
     assert ASR_TRANSCRIBE_TIMEOUT_S > 0
+
+
+# ── Long audio scales the budget (CPU-only host, long recording) ────────────
+# A flat 300s cap abandoned a legitimately long file on a slow CPU host even
+# though nothing was wedged. The budget must grow with the audio's DURATION.
+
+def test_effective_timeout_scales_with_audio_length(monkeypatch):
+    monkeypatch.delenv("OMNIVOICE_ASR_TIMEOUT_RTF", raising=False)
+    # 600s of audio at the default 12x allowance → 7200s, well above the floor.
+    assert _effective_transcribe_timeout(300.0, 600.0) == 7200.0
+
+
+def test_effective_timeout_keeps_floor_for_short_or_unknown(monkeypatch):
+    monkeypatch.delenv("OMNIVOICE_ASR_TIMEOUT_RTF", raising=False)
+    # Short clip: floor wins (a hang on a short file still trips at 300s).
+    assert _effective_transcribe_timeout(300.0, 5.0) == 300.0
+    # Unknown duration (probe failed) → unchanged flat floor.
+    assert _effective_transcribe_timeout(300.0, None) == 300.0
+    assert _effective_transcribe_timeout(300.0, 0.0) == 300.0
+
+
+def test_effective_timeout_rtf_env_override(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_ASR_TIMEOUT_RTF", "3")
+    assert _effective_transcribe_timeout(300.0, 600.0) == 1800.0
+    # A non-positive / malformed RTF disables scaling (never shrinks the floor).
+    monkeypatch.setenv("OMNIVOICE_ASR_TIMEOUT_RTF", "0")
+    assert _effective_transcribe_timeout(300.0, 600.0) == 300.0
+    monkeypatch.setenv("OMNIVOICE_ASR_TIMEOUT_RTF", "nan-ish")
+    assert _effective_transcribe_timeout(300.0, 100.0) == 1200.0  # default 12x
+
+
+def test_long_audio_finishes_past_the_flat_floor(monkeypatch):
+    # The whole point: a decode that runs past the flat floor but within the
+    # duration-scaled budget must COMPLETE, not be abandoned.
+    monkeypatch.delenv("OMNIVOICE_ASR_TIMEOUT_RTF", raising=False)
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def _slow_but_valid():
+        time.sleep(0.4)  # exceeds the 0.2s flat floor below
+        return "done"
+
+    async def _go():
+        # audio_seconds=10 → 120s budget at default 12x, so 0.4s is fine.
+        out = await run_transcribe_guarded(
+            pool, _slow_but_valid, what="Dictation", timeout=0.2, audio_seconds=10.0,
+        )
+        assert out == "done"
+
+    asyncio.run(_go())
+    pool.shutdown(wait=True)
 
 
 def test_slow_transcribe_raises_actionable_timeout():

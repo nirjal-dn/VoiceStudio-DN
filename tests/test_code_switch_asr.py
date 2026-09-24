@@ -101,16 +101,17 @@ def test_decoding_uses_notebook_params(monkeypatch):
 
 def test_anti_repetition_defaults(monkeypatch):
     # A soft repetition penalty (>1.0) is on by default so the greedy pass does
-    # not loop — the loop is what both duplicates the tail and (via its
-    # overshooting timestamp) truncates long files. The hard n-gram block stays
-    # off so legitimate reduplication is not clipped.
+    # not loop, AND a hard 3-gram block is on by default: the loop is what both
+    # duplicates the tail and (via its overshooting timestamp) truncates long
+    # files, and the penalty alone left tail loops. The 3-gram bar clears loops
+    # while leaving 2-token Nepali reduplication ("बिस्तारै बिस्तारै") intact.
     for e in ("OMNIVOICE_CS_REPETITION_PENALTY", "OMNIVOICE_CS_NO_REPEAT_NGRAM"):
         monkeypatch.delenv(e, raising=False)
     bk = _backend_with("नमस्ते")
     bk.transcribe("x.wav")
     kw = bk._model.transcribe_kwargs
     assert kw["repetition_penalty"] == 1.1
-    assert kw["no_repeat_ngram_size"] == 0
+    assert kw["no_repeat_ngram_size"] == 3
     # condition_on_previous_text stays False so a loop can't seed the next window.
     assert kw["condition_on_previous_text"] is False
 
@@ -197,6 +198,68 @@ def test_initial_prompt_can_be_disabled(monkeypatch):
     bk = _backend_with("नमस्ते")
     bk.transcribe("x.wav")
     assert bk._model.transcribe_kwargs["initial_prompt"] is None
+
+
+# ── hotwords are OFF by default (a standing English list makes Nepali decode ─
+# in English script — the every-window bias overwhelms the forced-`ne` decode).
+# Opt in via OMNIVOICE_CS_HOTWORDS for a few domain terms only.
+
+def test_hotwords_off_by_default(monkeypatch):
+    monkeypatch.delenv("OMNIVOICE_CS_PROMPT", raising=False)
+    monkeypatch.delenv("OMNIVOICE_CS_HOTWORDS", raising=False)
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    # No standing English vocabulary is injected — Nepali stays in Devanagari.
+    assert bk._model.transcribe_kwargs["hotwords"] is None
+
+
+def test_hotwords_env_opt_in(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_HOTWORDS", "kubernetes namespace pod")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["hotwords"] == "kubernetes namespace pod"
+
+
+def test_hotwords_empty_env_is_off(monkeypatch):
+    monkeypatch.setenv("OMNIVOICE_CS_HOTWORDS", "")
+    bk = _backend_with("नमस्ते")
+    bk.transcribe("x.wav")
+    assert bk._model.transcribe_kwargs["hotwords"] is None
+
+
+# ── Tail-repetition loop collapse (the "last part is repeated" fix) ──────────
+# Whisper's tail loop emits the same utterance two+ times as separate VAD
+# segments; the run is collapsed to one before the whole-recording merge, so the
+# final transcript neither duplicates the tail nor carries the loop forward.
+
+def test_repeated_tail_segments_are_collapsed():
+    bk = _backend_with([
+        "नमस्ते, आज मौसम राम्रो छ।",
+        "भोलि म office जान्छु।",
+        "भोलि म office जान्छु।",   # loop — same as previous segment
+        "भोलि म office जान्छु।",   # loop
+    ])
+    out = bk.transcribe("x.wav")
+    assert out["text"] == "नमस्ते, आज मौसम राम्रो छ। भोलि म office जान्छु।"
+    assert len(out["segments"]) == 1  # collapsed run + whole-recording merge
+
+
+def test_non_adjacent_repeat_is_kept():
+    # A genuine restatement separated by other speech is NOT a loop artifact and
+    # must survive (only back-to-back identical segments are dropped).
+    bk = _backend_with([
+        "म आउँछु।",
+        "पख न।",
+        "म आउँछु।",
+    ])
+    out = bk.transcribe("x.wav")
+    assert out["text"] == "म आउँछु। पख न। म आउँछु।"
+
+
+def test_no_false_collapse_on_distinct_segments():
+    bk = _backend_with(["पहिलो वाक्य।", "दोस्रो वाक्य।", "तेस्रो वाक्य।"])
+    out = bk.transcribe("x.wav")
+    assert out["text"] == "पहिलो वाक्य। दोस्रो वाक्य। तेस्रो वाक्य।"
 
 
 def test_beam_size_env_invalid_falls_back_to_default(monkeypatch):

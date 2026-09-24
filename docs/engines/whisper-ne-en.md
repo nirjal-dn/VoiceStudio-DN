@@ -65,6 +65,16 @@ recording. This is the recipe validated in the reference notebook
    drops non-speech, and `condition_on_previous_text=False` stops one window's
    bias bleeding into the next. The result is **one continuous transcript**
    (top-level `text`), never split by language or script.
+   - **English in Latin is nudged by the `initial_prompt`** (mixed Nepali/English
+     in one sentence), which conditions Whisper's first ~30s window. A stronger
+     every-window nudge via `hotwords` is available but **off by default** — a
+     standing English vocabulary re-injected into every window biases the
+     forced-`ne` decode so hard that ordinary Nepali comes out in English script.
+     Opt in with `OMNIVOICE_CS_HOTWORDS` for a few domain terms only.
+   - **Repeated tail utterances are dropped.** When Whisper's tail loop emits the
+     same utterance two-or-more times as consecutive VAD segments, that run is
+     collapsed to one before the whole-recording merge, so the final transcript
+     neither duplicates the tail nor carries the loop forward.
 5. **Whole-recording single segment.** Whisper's VAD splits speech into
    per-utterance segments internally (that is how it drops silence), but they
    are merged back before returning — a dictated recording comes out as **one
@@ -90,8 +100,9 @@ recording. This is the recipe validated in the reference notebook
 | `OMNIVOICE_CS_LANGUAGE` | `ne` | Whisper decode language. Set `en` to pin English, or any Whisper language code. |
 | `OMNIVOICE_CS_BEAM_SIZE` | `5` | Beam size / `best_of`. Lower (e.g. `1`) is faster on CPU at some accuracy cost. |
 | `OMNIVOICE_CS_TEMPERATURE` | ladder `0.0,0.2,…,1.0` | Decode temperature. A single float (e.g. `0.0`) forces greedy-only; a comma list customises the fallback ladder. |
+| `OMNIVOICE_CS_HOTWORDS` | *(off)* | A few domain terms to keep in **Latin** on every decode window. Off by default: faster-whisper re-injects hotwords every window, so a broad English list biases the forced-`ne` decode into writing ordinary Nepali in English script. Space-separated; use sparingly. |
 | `OMNIVOICE_CS_REPETITION_PENALTY` | `1.1` | Soft penalty (>1.0) against the decode repetition loop that both duplicates the tail (“the last few words repeat”) and, via its overshooting timestamp, truncates long files. Lower to `1.0` to disable; raise (e.g. `1.3`) for stubborn loops. |
-| `OMNIVOICE_CS_NO_REPEAT_NGRAM` | `0` (off) | Hard block: forbid any repeated N-token run. Off by default because it can clip genuine Nepali reduplication (`बिस्तारै बिस्तारै`); set `3` only if the soft penalty above leaves loops. |
+| `OMNIVOICE_CS_NO_REPEAT_NGRAM` | `3` | Hard block: forbid any repeated N-token run. Defaults to `3` — the soft penalty alone left tail loops that truncated long files; a 3-gram bar kills them while leaving 2-token Nepali reduplication (`बिस्तारै बिस्तारै`) intact. Set `0` to disable. |
 | `OMNIVOICE_CS_HALLUCINATION_SILENCE_S` | `2.0` | Skip silent gaps longer than this (seconds), where Whisper tends to hallucinate/loop. Applied only on the word-timestamped paths (dub / file), the only place faster-whisper can locate gaps; `0` disables. |
 | `OMNIVOICE_CS_SPOKEN_NUMBERS` | `1` (on) | Convert spoken number *words* to digits, each in the script of the language it was spoken in: English words → Western digits (`nine thousand eight hundred forty-five` → `9845`), Nepali words → Devanagari numerals (`सन्तानब्बे` → `९७`). Cardinals only, decided from the number word itself — bare digits Whisper already emitted are preserved, never guessed from surrounding script. A lone/trailing `छ` (also the copula "is") stays a word — it counts as `6` only right before a scale (`छ सय` → `600`). Set `0` to keep Whisper's number words verbatim. |
 | `OMNIVOICE_CS_ASR_MODEL` | `Systran/faster-whisper-large-v3` | The CTranslate2 large-v3 repo to load. |
@@ -99,18 +110,27 @@ recording. This is the recipe validated in the reference notebook
 ## Limits
 
 Large-v3 code-switches well but is not perfect: a rare English word inside a
-Nepali matrix can still be transliterated into Devanagari, and vice-versa. For
-production-grade intra-word switching, fine-tune large-v3 on a Nepali–English
-code-switched corpus and point `OMNIVOICE_CS_ASR_MODEL` at the converted result
-— no code change needed. Pure-Nepali audio where you do **not** need English is
-still best served by [IndicConformer](indic-conformer.md).
+Nepali matrix can still be transliterated into Devanagari, and vice-versa. The
+`initial_prompt` nudges embedded English toward Latin in the first window;
+resist the temptation to force it harder with a broad `OMNIVOICE_CS_HOTWORDS`
+list, which flips the failure the other way (Nepali written in English script).
+For production-grade intra-word switching, fine-tune large-v3 on a
+Nepali–English code-switched corpus and point `OMNIVOICE_CS_ASR_MODEL` at the
+converted result — no code change needed. Pure-Nepali audio where you do **not**
+need English is still best served by [IndicConformer](indic-conformer.md).
 
 On a **long file**, if the transcript stops early or the last few words repeat,
 that is Whisper's decode repetition loop (a looped segment's overshooting
-timestamp makes the decoder seek past the rest of the audio). The default
-`OMNIVOICE_CS_REPETITION_PENALTY=1.1` suppresses it; raise it, or enable
-`OMNIVOICE_CS_NO_REPEAT_NGRAM=3`, if a specific clip still loops. Note this is a
+timestamp makes the decoder seek past the rest of the audio). It is suppressed
+by three layers: the soft `OMNIVOICE_CS_REPETITION_PENALTY=1.1`, the hard
+`OMNIVOICE_CS_NO_REPEAT_NGRAM=3` block, and a post-decode collapse of repeated
+tail segments. Raise the penalty (e.g. `1.3`) if a specific clip still loops. Note this is a
 *decoding* fix, not a speed one: large-v3 on CPU is slow, and a genuinely long
-file can exceed the whole-file transcribe guard (`OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S`,
-default 300 s) — raise that for very long single files, or pick a smaller/Turbo
+file just needs time. The whole-file transcribe guard **scales its budget with
+the audio's length** so a long recording isn't abandoned mid-decode on a slow
+(CPU-only) host: the bound is `max(OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S` (flat
+floor, default 300 s)`, duration × OMNIVOICE_ASR_TIMEOUT_RTF)` where the RTF is
+the compute-seconds allowed per audio-second (default 12). For an
+extraordinarily slow host raise `OMNIVOICE_ASR_TIMEOUT_RTF`; a short clip that
+still times out is a genuine hang, not a long file. Or pick a smaller/Turbo
 model.

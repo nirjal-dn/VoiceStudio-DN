@@ -62,6 +62,8 @@ approval), [Windows](../install/windows.md), [Linux](../install/linux.md),
 | Parakeet TDT (MLX) | [parakeet-mlx](parakeet-mlx.md) | Apple Silicon | dictation, 25 EU languages | default on mac-ARM source installs |
 | Moonshine | [moonshine](moonshine.md) | CPU | edge/low-power, no timestamps | `pip install` (see guide) |
 | FunASR (SenseVoice) | [funasr](funasr.md) | CUDA · CPU | 50+ languages, inline diarization | `pip install funasr` |
+| IndicConformer 600M | [indic-conformer](indic-conformer.md) | CPU | Nepali + 21 Indic langs, Devanagari-native | Model Catalogue (gated, ~2.4 GB) |
+| IndicConformer + Qwen normalization | [indic-conformer-qwen](indic-conformer.md#indicconformer--qwen-normalization-indic-conformer-qwen) | CPU | Nepali/English: Latinizes English, digits, punctuation | above + `uv sync --extra codeswitch` (Qwen GGUF) |
 | Sherpa-ONNX dictation | [sherpa-onnx-asr](sherpa-onnx-asr.md) | CPU | live streaming dictation | curated model download |
 | OpenAI-compatible (local or remote) | [openai-compatible-asr](openai-compatible-asr.md) | network | a configured endpoint; loopback stays local | Model Catalogue |
 

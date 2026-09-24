@@ -14,9 +14,10 @@ from services import hf_revisions
 
 ROOT = Path(__file__).resolve().parents[1]
 NEPALI_REPOS = {
-    "ai4bharat/indic-conformer-600m-multilingual": ("ASR", ["indic-conformer"]),
+    "ai4bharat/indic-conformer-600m-multilingual": ("ASR", ["indic-conformer", "indic-conformer-qwen"]),
     "Oshara/xtts-v2-nepali": ("TTS", ["xtts-nepali"]),
     "ai4bharat/indic-parler-tts": ("TTS", ["indic-parler-tts"]),
+    "Qwen/Qwen2.5-1.5B-Instruct-GGUF": ("ASR", ["indic-conformer-qwen"]),
 }
 
 

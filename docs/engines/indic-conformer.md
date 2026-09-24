@@ -49,10 +49,44 @@ For Devanagari languages (Nepali by default), every character outside the Devana
 removed from the output, so no Latin, Arabic or Hangul text can appear. The model's `|` sentence
 mark is written as `।`, and a finished dictation ends with `।` instead of a Latin period.
 
+## IndicConformer + Qwen normalization (`indic-conformer-qwen`)
+
+A companion engine runs IndicConformer, then **automatically** normalizes the raw
+Devanagari transcript with a small local LLM — no manual step. The pipeline is
+`Audio → IndicConformer → Qwen normalization → final transcript`. It fixes the
+first two limitations below in one pass:
+
+- **Latinizes code-switched English** — `अकाउन्ट` → `account`, `ब्यालेन्स` → `balance`.
+- **Corrects obvious transcription slips** in Nepali words.
+- **Digitizes spoken numbers** — Nepali number words → Devanagari numerals,
+  English number words → Western digits.
+- **Adds punctuation, spacing, and Latin capitalization.**
+
+Genuine Nepali stays in Devanagari; nothing is translated. Normalization is
+**best-effort**: if the LLM is unavailable or its output fails the sanity guard
+(runaway length, or dropping most of the input's Devanagari — the anti-translation
+check), the raw IndicConformer transcript stands. The raw text is kept in the
+result's `raw_text` and logged for debugging.
+
+**Setup**: needs the IndicConformer weights (above) **plus** the Qwen normalizer
+and its runtime — install the `codeswitch` extra (`uv sync --extra codeswitch`,
+which brings `llama-cpp-python`) and the **Qwen2.5-1.5B Instruct Q4_K_M** GGUF
+(~1 GB, downloaded on first use, pinned to a reviewed revision). Until both are
+present the engine reports itself unavailable with the install hint; plain
+`indic-conformer` keeps working without them. Reuses the same normalization
+module as the opt-in [codeswitch-restore](codeswitch-restore.md) layer, so its
+`OMNIVOICE_CODESWITCH_MODEL_REPO` / `_FILE` / `_PATH` and
+`OMNIVOICE_CODESWITCH_TIMEOUT_S` overrides apply here too.
+
+Select **IndicConformer + Qwen normalization** in **Model Catalogue → ASR**, or
+`OMNIVOICE_ASR_BACKEND=indic-conformer-qwen`.
+
 ## Limitations
 
-- Punctuation inside sentences (`?`, `,`) is not produced.
+- Punctuation inside sentences (`?`, `,`) is not produced. *(The
+  `indic-conformer-qwen` engine above adds it.)*
 - English words spoken inside Nepali come out in Devanagari (for example, "insurance" as इन्सुरेन्स).
+  *(The `indic-conformer-qwen` engine above Latinizes them.)*
 - Runs on CPU only. On an i7-9700 it transcribes about 5× faster than real time and uses ~3 GB of RAM,
   plus roughly 0.4 GB for a 30 s pass and 1 GB for a 120 s pass (measured); passes are capped at 90 s.
 - Uploads at other sample rates are resampled to 16 kHz with an anti-aliasing filter; stereo is mixed

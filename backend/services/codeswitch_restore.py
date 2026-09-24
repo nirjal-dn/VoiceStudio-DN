@@ -156,9 +156,17 @@ def _model_path() -> str | None:
         return explicit if os.path.exists(explicit) else None
     repo = os.environ.get("OMNIVOICE_CODESWITCH_MODEL_REPO", _DEFAULT_REPO).strip()
     fname = os.environ.get("OMNIVOICE_CODESWITCH_MODEL_FILE", _DEFAULT_FILE).strip()
+    # Pin the reviewed commit for the curated repo (supply-chain: branch names
+    # are mutable). A user-supplied repo has no pinned SHA — follow its default.
+    revision = None
+    try:
+        from services.hf_revisions import CURATED_REVISIONS
+        revision = CURATED_REVISIONS.get(repo)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from huggingface_hub import hf_hub_download
-        return hf_hub_download(repo_id=repo, filename=fname)
+        return hf_hub_download(repo_id=repo, filename=fname, revision=revision)
     except Exception as e:  # noqa: BLE001 — missing model/network is not an error
         logger.warning("code-switch model unavailable (%s) — passing through", e)
         return None
@@ -306,4 +314,144 @@ async def maybe_restore_codeswitch_async(
         )
     except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
         logger.warning("code-switch restoration failed/timed out: %s", e)
+        return None
+
+
+# ── Full normalization (indic-conformer-qwen engine) ─────────────────────────
+# The strict restore path above is deliberately minimal (Latinize English + add
+# punctuation) and its subsequence guard FORBIDS spelling/number edits. The
+# `indic-conformer-qwen` engine wants MORE — correct obvious transcription slips
+# and normalize spoken numbers too — so it uses this parallel path with a
+# broader prompt and a relaxed sanity guard. The model loader/singleton is
+# shared; only the prompt and guard differ. Always-on: the ENGINE opting in is
+# the switch, not an env var.
+
+_NORMALIZE_SYSTEM_PROMPT = """You normalize a Nepali speech-to-text transcript. It is written entirely in Devanagari; the speaker mixed in English words that were transcribed phonetically in Devanagari, and the recognizer added no punctuation. You are a transcript normalizer, NOT an assistant and NOT a translator.
+
+Do these things, and ONLY these:
+1. Rewrite words that are clearly English (transcribed phonetically in Devanagari) back into normal English Latin spelling. Example: "अकाउन्ट" → "account", "ब्यालेन्स" → "balance", "चेक" → "check".
+2. Correct obvious spelling/transcription slips in Nepali words (a dropped or duplicated matra, a split word), only when the intended word is unambiguous.
+3. Convert spoken number expressions to digits when the meaning is clear: Nepali number words → Devanagari numerals, English number words → Western digits. Leave numbers already written as digits unchanged.
+4. Add punctuation (commas, and a final . ? or ।), sentence spacing, and normal capitalization of Latin words.
+
+Strict rules:
+- Keep every genuine Nepali word in Devanagari; keep every genuine English word in Latin.
+- Do NOT translate Nepali into English or English into Nepali.
+- Do NOT paraphrase, summarize, reorder, add, or remove content words.
+- Preserve the original meaning and wording. Make the smallest change that reads correctly.
+- Output ONLY the normalized transcript on a single line — no quotes, no explanation, no preamble."""
+
+_NORMALIZE_EXAMPLES: list[tuple[str, str]] = [
+    ("मेरो अकाउन्टको ब्यालेन्स चेक गरिदिनुहोस्",
+     "मेरो account को balance check गरिदिनुहोस्।"),
+    ("नमस्ते मेरो अकाउन्टको ब्यालेन्स कति छ",
+     "नमस्ते, मेरो account को balance कति छ?"),
+    ("मेरो अकाउन्टमा पाँच हजार रुपैयाँ छ",
+     "मेरो account मा ५००० रुपैयाँ छ।"),
+]
+
+# Relaxed sanity bounds for the normalized output (vs the strict subsequence
+# guard). Spelling and number edits legitimately add/drop Devanagari, so the
+# subsequence check can't apply here.
+# ponytail: heuristic ceiling — a length window + a Devanagari-retention floor.
+# It stops the two failure modes that matter (runaway generation, and wholesale
+# translation/romanization to English script — the recent "Nepali written in
+# Latin" class, which drops Devanagari retention to ~0). The floor is low (0.25)
+# on purpose: short code-switch-heavy utterances ("मेरो account", "phone गर") are
+# legitimately <50% Devanagari once the English is Latinized, so a higher floor
+# would false-reject them. A partial mistranslation can still slip; per-token
+# alignment is the upgrade path if that's ever observed.
+_NORMALIZE_MIN_RATIO = 0.4
+_NORMALIZE_MAX_RATIO = 2.5
+_NORMALIZE_MIN_DEVANAGARI_RETENTION = 0.25
+
+
+def _normalization_sane(src: str, out: str) -> bool:
+    """Accept ``out`` as a normalization of ``src`` only if it stays within a
+    length window and keeps most of the input's Devanagari content (so a full
+    translation to English script fails closed)."""
+    src, out = (src or "").strip(), (out or "").strip()
+    if src and not out:
+        return False
+    if not src:
+        return False
+    ratio = len(out) / len(src)
+    if ratio < _NORMALIZE_MIN_RATIO or ratio > _NORMALIZE_MAX_RATIO:
+        return False
+    src_dev = _devanagari_stream(src)
+    if src_dev:
+        retained = len(_devanagari_stream(out)) / len(src_dev)
+        if retained < _NORMALIZE_MIN_DEVANAGARI_RETENTION:
+            return False
+    return True
+
+
+def normalize_transcript(text: str, *, timeout_s: float | None = None) -> str:
+    """Run one full-normalization pass (Latinize English + fix obvious spelling +
+    spoken-number digits + punctuation). Raises on model/inference failure;
+    callers use :func:`maybe_normalize_transcript` for the pass-through path."""
+    model = _get_model()
+    if model is None:
+        raise RuntimeError("normalization model unavailable")
+    messages = [{"role": "system", "content": _NORMALIZE_SYSTEM_PROMPT}]
+    for src, dst in _NORMALIZE_EXAMPLES:
+        messages.append({"role": "user", "content": src})
+        messages.append({"role": "assistant", "content": dst})
+    messages.append({"role": "user", "content": text})
+
+    deadline = time.monotonic() + (timeout_s if timeout_s is not None else _timeout_s())
+    res = model.create_chat_completion(
+        messages=messages,
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=512,
+        seed=0,
+        stopping_criteria=_deadline_stop(deadline),
+    )
+    return _strip_wrapping(res["choices"][0]["message"]["content"])
+
+
+def maybe_normalize_transcript(text: str, *, timeout_s: float | None = None) -> str | None:
+    """Best-effort full normalization for a Devanagari final. Returns the
+    normalized transcript, or None when the text has no Devanagari, the model is
+    unavailable, the sanity guard rejects the output, or anything fails — the
+    raw transcript always stands. Unlike :func:`maybe_restore_codeswitch` this is
+    NOT env-gated: the `indic-conformer-qwen` engine is the opt-in. Never raises.
+    """
+    if not text or not text.strip():
+        return None
+    if not _has_devanagari(text):
+        return None  # nothing phonetically-Devanagari to normalize
+    try:
+        out = normalize_transcript(text, timeout_s=timeout_s)
+    except Exception as e:  # noqa: BLE001 — pass-through is the contract
+        logger.warning("transcript normalization skipped: %s", e)
+        return None
+    if not out or out == text.strip():
+        return None
+    if not _normalization_sane(text, out):
+        logger.warning(
+            "transcript normalization rejected (out of sanity bounds) — "
+            "keeping raw transcript",
+        )
+        return None
+    return out
+
+
+async def maybe_normalize_transcript_async(
+    text: str, *, timeout_s: float | None = None
+) -> str | None:
+    """Async, hard-time-bounded full normalization. Runs
+    :func:`maybe_normalize_transcript` off-thread under the budget. None on
+    timeout/failure."""
+    if not text or not text.strip() or not _has_devanagari(text):
+        return None
+    budget = timeout_s if timeout_s is not None else _timeout_s()
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(maybe_normalize_transcript, text, timeout_s=budget),
+            timeout=budget + 2.0,
+        )
+    except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
+        logger.warning("transcript normalization failed/timed out: %s", e)
         return None
